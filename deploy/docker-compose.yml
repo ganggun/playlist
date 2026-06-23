@@ -1,0 +1,29 @@
+services:
+  playlist-backend:
+    image: ${DOCKERHUB_USERNAME}/playlist-backend:${IMAGE_TAG:-latest}
+    container_name: playlist-backend
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: 8000
+    expose:
+      - "8000"
+    networks:
+      - playlist
+
+  playlist-frontend:
+    image: ${DOCKERHUB_USERNAME}/playlist-frontend:${IMAGE_TAG:-latest}
+    container_name: playlist-frontend
+    restart: unless-stopped
+    depends_on:
+      - playlist-backend
+    ports:
+      - "127.0.0.1:${APP_HOST_PORT:-19520}:80"
+    networks:
+      - playlist
+
+networks:
+  playlist:
+    name: playlist
