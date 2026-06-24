@@ -79,8 +79,8 @@ PUBLIC_SSL_PORT=9520 APP_HOST_PORT=19520 ./setup-nginx.sh
 
 `.github/workflows/deploy.yml`은 `main` 브랜치 push 시 다음 작업을 수행합니다.
 
-1. backend Docker 이미지 빌드 및 Docker Hub push
-2. frontend Docker 이미지 빌드 및 Docker Hub push
+1. backend Docker 이미지 빌드 및 GitHub Container Registry push
+2. frontend Docker 이미지 빌드 및 GitHub Container Registry push
 3. SSH로 홈서버 접속
 4. `/home/ganggun0113/apps/playlist-request`에 compose/env 작성
 5. `docker compose pull && docker compose up -d`
@@ -88,8 +88,6 @@ PUBLIC_SSL_PORT=9520 APP_HOST_PORT=19520 ./setup-nginx.sh
 GitHub Secrets:
 
 ```text
-DOCKERHUB_USERNAME
-DOCKERHUB_TOKEN
 SERVER_HOST=59.25.222.247
 SERVER_PORT=2222
 SERVER_USER=ganggun0113
@@ -108,3 +106,10 @@ SPOTIFY_PLAYLIST_ID
 `SPOTIFY_ACCESS_TOKEN`은 refresh token 방식으로 운영하면 비워도 됩니다.
 
 현재 workflow는 실수로 `SPORTIFY_ID`, `SPORTIFY_SECRET` 이름으로 만든 Secret도 fallback으로 읽습니다. 나중에는 `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`으로 맞추는 것이 좋습니다.
+
+이미지는 Docker Hub가 아니라 GitHub Container Registry를 씁니다.
+
+```text
+ghcr.io/ganggun/playlist-backend:latest
+ghcr.io/ganggun/playlist-frontend:latest
+```

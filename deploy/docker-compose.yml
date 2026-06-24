@@ -1,6 +1,6 @@
 services:
   playlist-backend:
-    image: ${DOCKERHUB_USERNAME}/playlist-backend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-ganggun}/playlist-backend:${IMAGE_TAG:-latest}
     container_name: playlist-backend
     restart: unless-stopped
     env_file:
@@ -14,7 +14,7 @@ services:
       - playlist
 
   playlist-frontend:
-    image: ${DOCKERHUB_USERNAME}/playlist-frontend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-ganggun}/playlist-frontend:${IMAGE_TAG:-latest}
     container_name: playlist-frontend
     restart: unless-stopped
     depends_on:
