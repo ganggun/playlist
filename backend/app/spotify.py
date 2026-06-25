@@ -48,7 +48,7 @@ class SpotifyClient:
         if not token:
             return None
 
-        params = {"q": query, "type": "track", "limit": 12, "market": "KR"}
+        params = {"q": query, "type": "track", "limit": 10, "market": "KR"}
         headers = {"Authorization": f"Bearer {token}"}
 
         async with httpx.AsyncClient(timeout=10) as client:
