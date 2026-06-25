@@ -71,6 +71,7 @@ jobs:
           IMAGE_NAMESPACE: ${{ github.repository_owner }}
           IMAGE_REGISTRY: ghcr.io
           IMAGE_TAG: latest
+          NGINX_SSL_PORT: ${{ secrets.NGINX_SSL_PORT }}
           PUBLIC_SSL_PORT: ${{ secrets.PUBLIC_SSL_PORT }}
           SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
           SPOTIFY_ACCESS_TOKEN: ${{ secrets.SPOTIFY_ACCESS_TOKEN }}
@@ -85,13 +86,14 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
-          envs: APP_DIR,APP_HOST_PORT,GHCR_TOKEN,GHCR_USERNAME,IMAGE_NAMESPACE,IMAGE_REGISTRY,IMAGE_TAG,PUBLIC_SSL_PORT,SERVER_PASSWORD,SPOTIFY_ACCESS_TOKEN,SPOTIFY_CLIENT_ID,SPOTIFY_CLIENT_SECRET,SPOTIFY_PLAYLIST_ID,SPOTIFY_REDIRECT_URI,SPOTIFY_REFRESH_TOKEN,USE_SPOTIFY_SEARCH
+          envs: APP_DIR,APP_HOST_PORT,GHCR_TOKEN,GHCR_USERNAME,IMAGE_NAMESPACE,IMAGE_REGISTRY,IMAGE_TAG,NGINX_SSL_PORT,PUBLIC_SSL_PORT,SERVER_PASSWORD,SPOTIFY_ACCESS_TOKEN,SPOTIFY_CLIENT_ID,SPOTIFY_CLIENT_SECRET,SPOTIFY_PLAYLIST_ID,SPOTIFY_REDIRECT_URI,SPOTIFY_REFRESH_TOKEN,USE_SPOTIFY_SEARCH
           script_stop: true
           script: |
             set -euo pipefail
 
             APP_HOST_PORT="${APP_HOST_PORT:-19520}"
-            PUBLIC_SSL_PORT="${PUBLIC_SSL_PORT:-9520}"
+            PUBLIC_SSL_PORT="${PUBLIC_SSL_PORT:-9513}"
+            NGINX_SSL_PORT="${NGINX_SSL_PORT:-8082}"
             USE_SPOTIFY_SEARCH="${USE_SPOTIFY_SEARCH:-false}"
 
             mkdir -p "$APP_DIR"
@@ -132,6 +134,8 @@ jobs:
             cat > .env <<ENV
             APP_NAME=Playlist Request Prototype
             APP_HOST_PORT=${APP_HOST_PORT}
+            NGINX_SSL_PORT=${NGINX_SSL_PORT}
+            PUBLIC_SSL_PORT=${PUBLIC_SSL_PORT}
             IMAGE_REGISTRY=${IMAGE_REGISTRY}
             IMAGE_NAMESPACE=${IMAGE_NAMESPACE}
             IMAGE_TAG=${IMAGE_TAG}
@@ -150,7 +154,8 @@ jobs:
             set -euo pipefail
 
             DOMAIN="${DOMAIN:-supdobby.me}"
-            PUBLIC_SSL_PORT="${PUBLIC_SSL_PORT:-9520}"
+            PUBLIC_SSL_PORT="${PUBLIC_SSL_PORT:-9513}"
+            NGINX_SSL_PORT="${NGINX_SSL_PORT:-8082}"
             APP_HOST_PORT="${APP_HOST_PORT:-19520}"
             CERT_PATH="${CERT_PATH:-/etc/letsencrypt/live/${DOMAIN}/fullchain.pem}"
             KEY_PATH="${KEY_PATH:-/etc/letsencrypt/live/${DOMAIN}/privkey.pem}"
@@ -158,7 +163,7 @@ jobs:
 
             sudo tee "$SITE_PATH" >/dev/null <<NGINX
             server {
-                listen ${PUBLIC_SSL_PORT} ssl;
+                listen ${NGINX_SSL_PORT} ssl;
                 server_name ${DOMAIN};
 
                 ssl_certificate ${CERT_PATH};
@@ -192,4 +197,4 @@ jobs:
               printf '%s\n' "$SERVER_PASSWORD" | sudo -S -v
             fi
 
-            PUBLIC_SSL_PORT="$PUBLIC_SSL_PORT" APP_HOST_PORT="$APP_HOST_PORT" ./setup-nginx.sh
+            PUBLIC_SSL_PORT="$PUBLIC_SSL_PORT" NGINX_SSL_PORT="$NGINX_SSL_PORT" APP_HOST_PORT="$APP_HOST_PORT" ./setup-nginx.sh
