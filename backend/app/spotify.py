@@ -8,6 +8,12 @@ from .config import settings
 from .models import Track
 
 
+class SpotifyAuthError(RuntimeError):
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class SpotifyClient:
     def __init__(self) -> None:
         self._app_token: str | None = None
@@ -186,7 +192,10 @@ class SpotifyClient:
     async def _token_request(self, payload: dict[str, str]) -> dict[str, Any]:
         credentials = f"{settings.spotify_client_id}:{settings.spotify_client_secret}"
         encoded = base64.b64encode(credentials.encode()).decode()
-        headers = {"Authorization": f"Basic {encoded}"}
+        headers = {
+            "Authorization": f"Basic {encoded}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
 
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
@@ -194,9 +203,34 @@ class SpotifyClient:
                 headers=headers,
                 data=payload,
             )
+
+        try:
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._token_error_message(response)
+            raise SpotifyAuthError(detail, status_code=response.status_code) from exc
 
         return response.json()
+
+    @staticmethod
+    def _token_error_message(response: httpx.Response) -> str:
+        try:
+            data = response.json()
+        except ValueError:
+            return f"Spotify token request failed with status {response.status_code}"
+
+        error = data.get("error")
+        description = data.get("error_description")
+        if isinstance(error, dict):
+            status = error.get("status", response.status_code)
+            message = error.get("message", "Spotify token request failed")
+            return f"Spotify token request failed ({status}): {message}"
+
+        if error and description:
+            return f"{error}: {description}"
+        if error:
+            return str(error)
+        return f"Spotify token request failed with status {response.status_code}"
 
     @staticmethod
     def _parse_track(item: dict[str, Any]) -> Track:

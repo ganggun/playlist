@@ -28,7 +28,7 @@ from .models import (
     Venue,
 )
 from .orm import RoomORM, SharedPlaylistORM, SongRequestORM
-from .spotify import spotify
+from .spotify import SpotifyAuthError, spotify
 from .store import DEMO_TRACKS, store
 
 
@@ -373,6 +373,11 @@ async def spotify_callback(
 
     try:
         token_data = await spotify.exchange_code(code)
+    except SpotifyAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
