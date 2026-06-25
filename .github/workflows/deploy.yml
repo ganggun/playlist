@@ -199,7 +199,7 @@ jobs:
 
             printf '%s' "$GHCR_TOKEN" | docker login "$IMAGE_REGISTRY" -u "$GHCR_USERNAME" --password-stdin
             docker compose pull
-            docker compose up -d --remove-orphans
+            docker compose up -d --force-recreate --remove-orphans
             docker compose ps
 
             if [ -n "${SERVER_PASSWORD:-}" ]; then
