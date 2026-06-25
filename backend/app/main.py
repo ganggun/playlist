@@ -417,10 +417,7 @@ async def spotify_callback(
                 room.spotify_playlist_image_url = images[0].get("url") if images else None
 
             db.commit()
-            return _success_html(
-                "방장 Spotify 연결 완료",
-                f"<strong>{escape(room.name)}</strong> 방의 신청곡은 이제 방장 플레이리스트에 바로 추가됩니다.",
-            )
+            return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&spotify=connected")
 
         if mode == "share":
             playlists = await spotify.get_user_playlists(access_token, limit=8)
@@ -449,10 +446,7 @@ async def spotify_callback(
                     db.add(target)
                 saved += 1
             db.commit()
-            return _success_html(
-                "플레이리스트 공유 완료",
-                f"<strong>{escape(room.name)}</strong> 방에 {saved}개의 플레이리스트를 공유했습니다.",
-            )
+            return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&shared={saved}")
 
     refresh_token = escape(token_data.get("refresh_token", ""))
     access_token = escape(token_data.get("access_token", ""))
