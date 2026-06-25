@@ -8,8 +8,11 @@ services:
         required: false
     environment:
       PORT: 8000
+      DATABASE_URL: sqlite:////data/playlist.db
     expose:
       - "8000"
+    volumes:
+      - playlist-data:/data
     networks:
       - playlist
 
@@ -27,3 +30,7 @@ services:
 networks:
   playlist:
     name: playlist
+
+volumes:
+  playlist-data:
+    name: playlist-data

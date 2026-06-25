@@ -1,11 +1,20 @@
-# Playlist Request Prototype
+# Room Playlist
 
-QR로 접속한 사용자가 곡을 검색해 신청하고, 운영자가 승인하면 플레이리스트에 반영하는 수업 프로젝트용 MVP입니다.
+방장이 Spotify 계정을 연결하면 참가자가 방 코드 또는 QR로 들어와 신청곡을 바로 방장 플레이리스트에 추가하는 React Native/FastAPI 앱입니다.
 
 ## 구조
 
 - `frontend`: Expo 기반 React Native 앱
 - `backend`: FastAPI 기반 API 서버
+
+## 현재 플로우
+
+1. 방장이 방을 만들고 Spotify를 연결합니다.
+2. 서버가 방장 계정에 신청곡 플레이리스트를 생성합니다.
+3. 참가자는 방 코드 또는 QR로 입장합니다.
+4. 참가자가 곡을 검색해 신청하면 서버가 방장의 Spotify 권한으로 플레이리스트에 바로 추가합니다.
+5. Spotify 사용자는 같은 방에 자기 플레이리스트를 공유할 수 있습니다.
+6. 방별 신청 기록으로 자주 신청된 아티스트/곡과 간단한 취향 문구를 보여줍니다.
 
 ## 빠른 실행
 
@@ -45,11 +54,16 @@ EXPO_PUBLIC_API_URL=http://192.168.0.10:8000
 
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`: 검색 API용 Client Credentials
 - `SPOTIFY_REDIRECT_URI`: `https://supdobby.me:<외부 HTTPS 포트>/api/auth/spotify/callback`
-- `SPOTIFY_REFRESH_TOKEN`: `/api/auth/spotify/login`으로 로그인 후 콜백 화면에서 발급받은 refresh token
-- `SPOTIFY_ACCESS_TOKEN`: refresh token을 쓰지 않을 때만 넣는 임시 사용자 토큰
-- `SPOTIFY_PLAYLIST_ID`: 승인된 곡을 추가할 대상 플레이리스트
+- `SPOTIFY_SCOPE`: `playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative`
+- `PUBLIC_APP_URL`: QR 코드가 가리킬 공개 앱 URL
 
-배포 후 `https://supdobby.me:<외부 HTTPS 포트>/api/auth/spotify/login`에 접속하면 Spotify 권한 승인 화면으로 이동합니다.
+배포 후 앱에서 방을 만들고 `방장 연결`을 누르면 Spotify 권한 승인 화면으로 이동합니다.
+
+현재 공개 배포 기준 Redirect URI:
+
+```text
+https://supdobby.me:9513/api/auth/spotify/callback
+```
 
 ## Docker
 
@@ -99,12 +113,9 @@ USE_SPOTIFY_SEARCH=true
 SPOTIFY_CLIENT_ID
 SPOTIFY_CLIENT_SECRET
 SPOTIFY_REDIRECT_URI=https://supdobby.me:9513/api/auth/spotify/callback
-SPOTIFY_REFRESH_TOKEN
-SPOTIFY_ACCESS_TOKEN
-SPOTIFY_PLAYLIST_ID
 ```
 
-`SPOTIFY_ACCESS_TOKEN`은 refresh token 방식으로 운영하면 비워도 됩니다.
+`SPOTIFY_REFRESH_TOKEN`, `SPOTIFY_ACCESS_TOKEN`, `SPOTIFY_PLAYLIST_ID`는 이전 단일 플레이리스트 호환용이라 새 방 기반 플로우에서는 비워도 됩니다.
 
 현재 workflow는 실수로 `SPORTIFY_ID`, `SPORTIFY_SECRET` 이름으로 만든 Secret도 fallback으로 읽습니다. 나중에는 `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`으로 맞추는 것이 좋습니다.
 

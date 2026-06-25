@@ -66,13 +66,21 @@ class SpotifyClient:
         if not settings.spotify_client_id or not settings.spotify_redirect_uri:
             raise ValueError("Spotify client id or redirect uri is empty")
 
+        return self.build_scoped_authorize_url(scope=settings.spotify_scope)
+
+    def build_scoped_authorize_url(self, scope: str, state: str | None = None) -> str:
+        if not settings.spotify_client_id or not settings.spotify_redirect_uri:
+            raise ValueError("Spotify client id or redirect uri is empty")
+
         params = {
             "client_id": settings.spotify_client_id,
             "response_type": "code",
             "redirect_uri": settings.spotify_redirect_uri,
-            "scope": settings.spotify_scope,
+            "scope": scope,
             "show_dialog": "true",
         }
+        if state:
+            params["state"] = state
         return f"https://accounts.spotify.com/authorize?{urlencode(params)}"
 
     async def exchange_code(self, code: str) -> dict[str, Any]:
@@ -86,9 +94,15 @@ class SpotifyClient:
         }
         return await self._token_request(payload)
 
-    async def add_to_playlist(self, track: Track) -> dict[str, Any]:
-        user_token = await self._get_user_token()
-        if not user_token or not settings.spotify_playlist_id:
+    async def add_to_playlist(
+        self,
+        track: Track,
+        refresh_token: str | None = None,
+        playlist_id: str | None = None,
+    ) -> dict[str, Any]:
+        user_token = await self._get_user_token(refresh_token)
+        target_playlist_id = playlist_id or settings.spotify_playlist_id
+        if not user_token or not target_playlist_id:
             return {"mode": "demo", "added": False, "reason": "Spotify token or playlist id is empty"}
 
         uri = track.spotify_uri or f"spotify:track:{track.id}"
@@ -97,7 +111,7 @@ class SpotifyClient:
 
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
-                f"https://api.spotify.com/v1/playlists/{settings.spotify_playlist_id}/tracks",
+                f"https://api.spotify.com/v1/playlists/{target_playlist_id}/tracks",
                 headers=headers,
                 json=payload,
             )
@@ -105,7 +119,53 @@ class SpotifyClient:
 
         return {"mode": "spotify", "added": True, "snapshot_id": response.json().get("snapshot_id")}
 
-    async def _get_user_token(self) -> str | None:
+    async def get_current_user(self, access_token: str) -> dict[str, Any]:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get("https://api.spotify.com/v1/me", headers=headers)
+            response.raise_for_status()
+        return response.json()
+
+    async def create_playlist(
+        self,
+        access_token: str,
+        user_id: str,
+        name: str,
+        description: str,
+    ) -> dict[str, Any]:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        payload = {"name": name, "description": description, "public": False}
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"https://api.spotify.com/v1/users/{user_id}/playlists",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+        return response.json()
+
+    async def get_user_playlists(self, access_token: str, limit: int = 8) -> list[dict[str, Any]]:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        params = {"limit": limit}
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                "https://api.spotify.com/v1/me/playlists",
+                headers=headers,
+                params=params,
+            )
+            response.raise_for_status()
+        return response.json().get("items", [])
+
+    async def _get_user_token(self, refresh_token: str | None = None) -> str | None:
+        if refresh_token:
+            token_data = await self._token_request(
+                {
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                }
+            )
+            return token_data.get("access_token")
+
         if self._user_token:
             return self._user_token
 

@@ -5,6 +5,7 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   SafeAreaView,
@@ -13,33 +14,39 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View
 } from "react-native";
 
 const DEFAULT_API_URL = Platform.OS === "web" ? "http://localhost:8000" : "http://10.0.2.2:8000";
 const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? DEFAULT_API_URL).replace(/\/$/, "");
 
-const statusLabels = {
-  pending: "대기",
-  approved: "승인",
-  rejected: "삭제"
-};
+const tabs = [
+  { key: "search", label: "신청곡" },
+  { key: "room", label: "방" },
+  { key: "share", label: "공유" }
+];
 
 export default function App() {
-  const [mode, setMode] = useState("guest");
-  const [venue, setVenue] = useState(null);
+  const { width } = useWindowDimensions();
+  const isWide = width >= 980;
+  const [room, setRoom] = useState(null);
+  const [activeTab, setActiveTab] = useState("search");
+  const [roomCode, setRoomCode] = useState("");
+  const [newRoomName, setNewRoomName] = useState("");
+  const [hostName, setHostName] = useState("");
   const [query, setQuery] = useState("");
   const [requesterName, setRequesterName] = useState("");
   const [tracks, setTracks] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [sharedPlaylists, setSharedPlaylists] = useState([]);
+  const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [submittingId, setSubmittingId] = useState("");
+  const [busyId, setBusyId] = useState("");
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
-  const pendingRequests = useMemo(
-    () => requests.filter((item) => item.status === "pending"),
-    [requests]
-  );
+  const latestRequests = useMemo(() => requests.slice(0, 8), [requests]);
 
   async function api(path, options = {}) {
     const response = await fetch(`${API_URL}${path}`, {
@@ -58,577 +65,1255 @@ export default function App() {
     return response.json();
   }
 
-  async function loadVenue() {
-    const data = await api("/api/venue");
-    setVenue(data);
+  async function loadRoom(code = room?.code) {
+    if (!code) return;
+    setError("");
+    const normalized = code.trim().toUpperCase();
+    const [nextRoom, nextRequests, nextShared, nextStats] = await Promise.all([
+      api(`/api/rooms/${normalized}`),
+      api(`/api/rooms/${normalized}/requests`),
+      api(`/api/rooms/${normalized}/shared-playlists`),
+      api(`/api/rooms/${normalized}/stats`)
+    ]);
+    setRoom(nextRoom);
+    setRoomCode(normalized);
+    setRequests(nextRequests);
+    setSharedPlaylists(nextShared);
+    setStats(nextStats);
+    rememberRoom(normalized);
   }
 
-  async function loadRequests() {
-    const data = await api("/api/requests");
-    setRequests(data);
-  }
-
-  async function searchTracks(nextQuery = query) {
+  async function joinRoom() {
+    if (!roomCode.trim()) return;
     setLoading(true);
     setError("");
     try {
-      const data = await api(`/api/tracks/search?q=${encodeURIComponent(nextQuery)}`);
-      setTracks(data);
+      await loadRoom(roomCode);
     } catch (err) {
-      setError("서버에 연결하지 못했습니다. API 주소를 확인하세요.");
+      setError("방을 찾지 못했습니다.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function addRequest(track) {
-    setSubmittingId(track.id);
+  async function createRoom() {
+    if (!newRoomName.trim()) {
+      setError("방 이름을 입력하세요.");
+      return;
+    }
+    setLoading(true);
     setError("");
     try {
-      await api("/api/requests", {
+      const created = await api("/api/rooms", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newRoomName.trim(),
+          host_name: hostName.trim() || "방장"
+        })
+      });
+      setRoom(created);
+      setRoomCode(created.code);
+      rememberRoom(created.code);
+      await loadRoom(created.code);
+      setNotice("방이 생성되었습니다. 방장 Spotify를 연결하세요.");
+    } catch (err) {
+      setError("방을 만들지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function searchTracks(nextQuery = query) {
+    if (!room) return;
+    setLoading(true);
+    setError("");
+    try {
+      const data = await api(`/api/rooms/${room.code}/tracks/search?q=${encodeURIComponent(nextQuery)}`);
+      setTracks(data);
+    } catch (err) {
+      setError("곡 검색에 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function addTrack(track) {
+    if (!room) return;
+    setBusyId(track.id);
+    setNotice("");
+    setError("");
+    try {
+      const created = await api(`/api/rooms/${room.code}/requests`, {
         method: "POST",
         body: JSON.stringify({
           track,
-          requester_name: requesterName || "익명"
+          requester_name: requesterName.trim() || "익명"
         })
       });
-      await Promise.all([loadVenue(), loadRequests()]);
-      Alert.alert("신청 완료", "운영자 화면에서 승인할 수 있습니다.");
+      await loadRoom(room.code);
+      if (created.status === "added") {
+        setNotice("플레이리스트에 추가했습니다.");
+      } else if (created.status === "failed") {
+        setError("신청은 저장했지만 Spotify 추가에 실패했습니다.");
+      } else {
+        setNotice("신청을 저장했습니다. 방장 Spotify 연결 후 자동 추가됩니다.");
+      }
     } catch (err) {
-      setError("신청을 저장하지 못했습니다.");
+      setError("신청을 처리하지 못했습니다.");
     } finally {
-      setSubmittingId("");
+      setBusyId("");
     }
   }
 
-  async function updateRequest(id, action) {
-    setSubmittingId(id);
-    setError("");
+  async function openUrl(url) {
     try {
-      if (action === "approve") {
-        await api(`/api/admin/requests/${id}/approve`, { method: "POST" });
-      } else {
-        await api(`/api/admin/requests/${id}`, { method: "DELETE" });
-      }
-      await Promise.all([loadVenue(), loadRequests()]);
+      await Linking.openURL(url);
     } catch (err) {
-      setError("관리자 작업을 처리하지 못했습니다.");
-    } finally {
-      setSubmittingId("");
+      Alert.alert("열 수 없음", url);
     }
+  }
+
+  function openHostLogin() {
+    if (room) openUrl(`${API_URL}/api/rooms/${room.code}/spotify/login`);
+  }
+
+  function openShareLogin() {
+    if (room) openUrl(`${API_URL}/api/rooms/${room.code}/spotify/share/login`);
+  }
+
+  function leaveRoom() {
+    setRoom(null);
+    setTracks([]);
+    setRequests([]);
+    setSharedPlaylists([]);
+    setStats(null);
+    setNotice("");
+    forgetRoom();
   }
 
   useEffect(() => {
-    Promise.all([loadVenue(), loadRequests(), searchTracks("")]).catch(() => {
-      setError("서버에 연결하지 못했습니다. 백엔드가 켜져 있는지 확인하세요.");
-    });
+    const initialCode = getInitialRoomCode();
+    if (initialCode) {
+      setRoomCode(initialCode);
+      loadRoom(initialCode).catch(() => setError("방을 불러오지 못했습니다."));
+    }
   }, []);
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle="light-content" />
       <KeyboardAvoidingView
-        style={styles.screen}
+        style={styles.app}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.eyebrow}>QR Playlist</Text>
-            <Text style={styles.title}>{venue?.name || "Playlist Request"}</Text>
-          </View>
-          <View style={styles.queuePill}>
-            <Text style={styles.queueNumber}>{venue?.queue_size ?? pendingRequests.length}</Text>
-            <Text style={styles.queueLabel}>대기</Text>
-          </View>
-        </View>
-
-        <View style={styles.nowPlaying}>
-          <AlbumArt track={venue?.now_playing} />
-          <View style={styles.nowPlayingText}>
-            <Text style={styles.label}>Now Playing</Text>
-            <Text style={styles.trackName} numberOfLines={1}>
-              {venue?.now_playing?.name || "Loading"}
-            </Text>
-            <Text style={styles.artistName} numberOfLines={1}>
-              {venue?.now_playing?.artists?.join(", ") || "잠시만요"}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.segmented}>
-          <SegmentButton active={mode === "guest"} label="신청" onPress={() => setMode("guest")} />
-          <SegmentButton active={mode === "admin"} label="관리" onPress={() => setMode("admin")} />
-        </View>
-
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-
-        {mode === "guest" ? (
-          <GuestView
-            query={query}
-            setQuery={setQuery}
-            requesterName={requesterName}
-            setRequesterName={setRequesterName}
+        {!room ? (
+          <JoinScreen
+            roomCode={roomCode}
+            setRoomCode={setRoomCode}
+            newRoomName={newRoomName}
+            setNewRoomName={setNewRoomName}
+            hostName={hostName}
+            setHostName={setHostName}
             loading={loading}
-            tracks={tracks}
-            submittingId={submittingId}
-            searchTracks={searchTracks}
-            addRequest={addRequest}
+            error={error}
+            joinRoom={joinRoom}
+            createRoom={createRoom}
           />
         ) : (
-          <AdminView
-            requests={requests}
-            pendingRequests={pendingRequests}
-            submittingId={submittingId}
-            updateRequest={updateRequest}
-            loadRequests={loadRequests}
-          />
+          <View style={[styles.shell, !isWide && styles.shellMobile]}>
+            {isWide ? (
+              <LibraryPanel room={room} requests={latestRequests} leaveRoom={leaveRoom} />
+            ) : null}
+
+            <View style={styles.mainPanel}>
+              <RoomHero
+                room={room}
+                stats={stats}
+                onRefresh={() => loadRoom(room.code)}
+                onHostLogin={openHostLogin}
+                onOpenPlaylist={() => room.spotify_playlist_url && openUrl(room.spotify_playlist_url)}
+              />
+
+              <View style={styles.tabBar}>
+                {tabs.map((tab) => (
+                  <Pressable
+                    key={tab.key}
+                    style={[styles.tabButton, activeTab === tab.key && styles.tabButtonActive]}
+                    onPress={() => setActiveTab(tab.key)}
+                  >
+                    <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
+                      {tab.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+
+              {activeTab === "search" ? (
+                <SearchTab
+                  query={query}
+                  setQuery={setQuery}
+                  requesterName={requesterName}
+                  setRequesterName={setRequesterName}
+                  tracks={tracks}
+                  loading={loading}
+                  busyId={busyId}
+                  searchTracks={searchTracks}
+                  addTrack={addTrack}
+                  requests={requests}
+                />
+              ) : null}
+
+              {activeTab === "room" ? (
+                <RoomTab
+                  room={room}
+                  stats={stats}
+                  requests={requests}
+                  onHostLogin={openHostLogin}
+                  onRefresh={() => loadRoom(room.code)}
+                  onOpenPlaylist={() => room.spotify_playlist_url && openUrl(room.spotify_playlist_url)}
+                />
+              ) : null}
+
+              {activeTab === "share" ? (
+                <ShareTab
+                  sharedPlaylists={sharedPlaylists}
+                  openShareLogin={openShareLogin}
+                  openUrl={openUrl}
+                />
+              ) : null}
+            </View>
+
+            {isWide ? (
+              <RightPanel
+                room={room}
+                stats={stats}
+                sharedPlaylists={sharedPlaylists}
+                openShareLogin={openShareLogin}
+                openUrl={openUrl}
+              />
+            ) : null}
+          </View>
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function GuestView({
-  query,
-  setQuery,
-  requesterName,
-  setRequesterName,
+function JoinScreen({
+  roomCode,
+  setRoomCode,
+  newRoomName,
+  setNewRoomName,
+  hostName,
+  setHostName,
   loading,
-  tracks,
-  submittingId,
-  searchTracks,
-  addRequest
+  error,
+  joinRoom,
+  createRoom
 }) {
   return (
-    <View style={styles.content}>
-      <View style={styles.searchRow}>
-        <TextInput
-          value={query}
-          onChangeText={setQuery}
-          onSubmitEditing={() => searchTracks(query)}
-          placeholder="곡명 또는 아티스트"
-          placeholderTextColor="#7D8477"
-          style={styles.searchInput}
-          returnKeyType="search"
-        />
-        <Pressable style={styles.primaryButton} onPress={() => searchTracks(query)}>
-          <Text style={styles.primaryButtonText}>검색</Text>
-        </Pressable>
+    <ScrollView contentContainerStyle={styles.joinWrap}>
+      <View style={styles.brandBlock}>
+        <Text style={styles.brandMark}>ROOM PLAYLIST</Text>
+        <Text style={styles.joinTitle}>공간의 플레이리스트를 함께 채우세요</Text>
+        <Text style={styles.joinSubtitle}>방장 Spotify 계정 하나로 모두가 신청곡을 추가합니다.</Text>
       </View>
 
-      <TextInput
-        value={requesterName}
-        onChangeText={setRequesterName}
-        placeholder="신청자 이름 선택 입력"
-        placeholderTextColor="#7D8477"
-        style={styles.nameInput}
-        maxLength={30}
-      />
-
-      {loading ? (
-        <View style={styles.loadingArea}>
-          <ActivityIndicator color="#1F6F64" />
+      <View style={styles.joinGrid}>
+        <View style={styles.joinCard}>
+          <Text style={styles.cardTitle}>방 입장</Text>
+          <TextInput
+            value={roomCode}
+            onChangeText={(value) => setRoomCode(value.toUpperCase())}
+            placeholder="6자리 코드"
+            placeholderTextColor="#6F6F6F"
+            autoCapitalize="characters"
+            style={styles.input}
+            onSubmitEditing={joinRoom}
+          />
+          <Pressable style={styles.greenButton} onPress={joinRoom} disabled={loading}>
+            <Text style={styles.greenButtonText}>{loading ? "확인 중" : "입장"}</Text>
+          </Pressable>
         </View>
+
+        <View style={styles.joinCard}>
+          <Text style={styles.cardTitle}>방 만들기</Text>
+          <TextInput
+            value={newRoomName}
+            onChangeText={setNewRoomName}
+            placeholder="예: 월암중 축제"
+            placeholderTextColor="#6F6F6F"
+            style={styles.input}
+          />
+          <TextInput
+            value={hostName}
+            onChangeText={setHostName}
+            placeholder="방장 이름"
+            placeholderTextColor="#6F6F6F"
+            style={styles.input}
+          />
+          <Pressable style={styles.secondaryDarkButton} onPress={createRoom} disabled={loading}>
+            <Text style={styles.secondaryDarkText}>{loading ? "생성 중" : "생성"}</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+    </ScrollView>
+  );
+}
+
+function LibraryPanel({ room, requests, leaveRoom }) {
+  return (
+    <View style={styles.libraryPanel}>
+      <View style={styles.libraryHeader}>
+        <Text style={styles.panelTitle}>내 방</Text>
+        <Pressable style={styles.roundButton} onPress={leaveRoom}>
+          <Text style={styles.roundButtonText}>나가기</Text>
+        </Pressable>
+      </View>
+      <View style={styles.libraryItemActive}>
+        <AlbumFallback text={room.name} size={52} />
+        <View style={styles.flex}>
+          <Text style={styles.itemTitle} numberOfLines={1}>{room.name}</Text>
+          <Text style={styles.mutedText}>{room.code}</Text>
+        </View>
+      </View>
+      <Text style={styles.panelSubtitle}>최근 신청</Text>
+      {requests.length === 0 ? (
+        <Text style={styles.emptySideText}>아직 신청곡이 없습니다.</Text>
       ) : (
-        <FlatList
-          data={tracks}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
-          renderItem={({ item }) => (
-            <TrackRow
-              track={item}
-              actionLabel={submittingId === item.id ? "저장중" : "신청"}
-              disabled={Boolean(submittingId)}
-              onPress={() => addRequest(item)}
-            />
-          )}
-          ListEmptyComponent={<Text style={styles.empty}>검색 결과가 없습니다.</Text>}
-        />
+        requests.map((request) => (
+          <View key={request.id} style={styles.libraryItem}>
+            <AlbumArt track={request.track} size={46} />
+            <View style={styles.flex}>
+              <Text style={styles.itemTitle} numberOfLines={1}>{request.track.name}</Text>
+              <Text style={styles.mutedText} numberOfLines={1}>{request.track.artists.join(", ")}</Text>
+            </View>
+          </View>
+        ))
       )}
     </View>
   );
 }
 
-function AdminView({ requests, pendingRequests, submittingId, updateRequest, loadRequests }) {
+function RoomHero({ room, stats, onRefresh, onHostLogin, onOpenPlaylist }) {
   return (
-    <ScrollView style={styles.content} contentContainerStyle={styles.list}>
-      <View style={styles.adminHeader}>
-        <View>
-          <Text style={styles.sectionTitle}>신청곡 큐</Text>
-          <Text style={styles.helperText}>대기 {pendingRequests.length}곡</Text>
+    <View style={styles.hero}>
+      <View style={styles.heroArtWrap}>
+        {room.spotify_playlist_image_url ? (
+          <Image source={{ uri: room.spotify_playlist_image_url }} style={styles.heroArt} />
+        ) : (
+          <AlbumFallback text={room.name} size={132} />
+        )}
+      </View>
+      <View style={styles.heroCopy}>
+        <Text style={styles.heroType}>공유 신청곡 방</Text>
+        <Text style={styles.heroTitle} numberOfLines={2}>{room.name}</Text>
+        <Text style={styles.heroMeta} numberOfLines={1}>
+          {room.host_spotify_display_name || room.host_name} · {room.request_count}곡 · 코드 {room.code}
+        </Text>
+        <View style={styles.heroActions}>
+          <Pressable style={styles.playButton} onPress={onOpenPlaylist}>
+            <Text style={styles.playButtonText}>▶</Text>
+          </Pressable>
+          <Pressable style={styles.pillButton} onPress={onHostLogin}>
+            <Text style={styles.pillButtonText}>
+              {room.spotify_connected ? "Spotify 연결됨" : "방장 연결"}
+            </Text>
+          </Pressable>
+          <Pressable style={styles.iconPill} onPress={onRefresh}>
+            <Text style={styles.iconPillText}>새로고침</Text>
+          </Pressable>
         </View>
-        <Pressable style={styles.secondaryButton} onPress={loadRequests}>
-          <Text style={styles.secondaryButtonText}>새로고침</Text>
+        {stats ? <Text style={styles.heroInsight} numberOfLines={2}>{stats.insight}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function SearchTab({
+  query,
+  setQuery,
+  requesterName,
+  setRequesterName,
+  tracks,
+  loading,
+  busyId,
+  searchTracks,
+  addTrack,
+  requests
+}) {
+  return (
+    <View style={styles.tabContent}>
+      <View style={styles.searchControls}>
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder="어떤 음악을 신청할까요?"
+          placeholderTextColor="#8A8A8A"
+          style={styles.searchInput}
+          returnKeyType="search"
+          onSubmitEditing={() => searchTracks(query)}
+        />
+        <TextInput
+          value={requesterName}
+          onChangeText={setRequesterName}
+          placeholder="이름"
+          placeholderTextColor="#8A8A8A"
+          style={styles.nameInput}
+          maxLength={30}
+        />
+        <Pressable style={styles.greenButtonSmall} onPress={() => searchTracks(query)}>
+          <Text style={styles.greenButtonText}>검색</Text>
         </Pressable>
       </View>
 
-      {requests.length === 0 ? (
-        <Text style={styles.empty}>아직 신청곡이 없습니다.</Text>
+      {loading ? (
+        <View style={styles.loadingArea}>
+          <ActivityIndicator color="#1ED760" />
+        </View>
       ) : (
-        requests.map((request) => (
-          <View key={request.id} style={styles.requestRow}>
-            <View style={styles.requestMain}>
-              <Text style={styles.trackName} numberOfLines={1}>
-                {request.track.name}
-              </Text>
-              <Text style={styles.artistName} numberOfLines={1}>
-                {request.track.artists.join(", ")} · {request.requester_name}
-              </Text>
-              <Text style={styles.statusText}>{statusLabels[request.status]}</Text>
-            </View>
+        <FlatList
+          data={tracks}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.trackList}
+          ListHeaderComponent={<TrackListHeader />}
+          ListEmptyComponent={<Text style={styles.emptyText}>검색 결과가 없습니다.</Text>}
+          renderItem={({ item, index }) => (
+            <TrackRow
+              index={index + 1}
+              track={item}
+              actionLabel={busyId === item.id ? "추가 중" : "추가"}
+              disabled={Boolean(busyId)}
+              onPress={() => addTrack(item)}
+            />
+          )}
+        />
+      )}
 
-            {request.status === "pending" ? (
-              <View style={styles.adminActions}>
-                <Pressable
-                  style={[styles.smallButton, styles.approveButton]}
-                  disabled={Boolean(submittingId)}
-                  onPress={() => updateRequest(request.id, "approve")}
-                >
-                  <Text style={styles.smallButtonText}>
-                    {submittingId === request.id ? "처리" : "승인"}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.smallButton, styles.rejectButton]}
-                  disabled={Boolean(submittingId)}
-                  onPress={() => updateRequest(request.id, "reject")}
-                >
-                  <Text style={styles.rejectButtonText}>삭제</Text>
-                </Pressable>
-              </View>
-            ) : null}
+      {requests.length ? (
+        <View style={styles.recentBlock}>
+          <Text style={styles.sectionTitle}>최근 추가</Text>
+          {requests.slice(0, 5).map((request, index) => (
+            <RequestRow key={request.id} request={request} index={index + 1} />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function RoomTab({ room, stats, requests, onHostLogin, onRefresh, onOpenPlaylist }) {
+  const qrUrl = `${API_URL}/api/rooms/${room.code}/qr`;
+  return (
+    <ScrollView contentContainerStyle={styles.tabScroll}>
+      <View style={styles.roomGrid}>
+        <View style={styles.infoCard}>
+          <Text style={styles.cardTitle}>입장 코드</Text>
+          <Text style={styles.roomCode}>{room.code}</Text>
+          <Image source={{ uri: qrUrl }} style={styles.qrImage} />
+        </View>
+        <View style={styles.infoCard}>
+          <Text style={styles.cardTitle}>Spotify</Text>
+          <Text style={styles.itemTitle}>
+            {room.spotify_playlist_name || "방장 연결 대기"}
+          </Text>
+          <Text style={styles.mutedText} numberOfLines={2}>
+            {room.spotify_connected ? "신청곡이 이 플레이리스트에 바로 추가됩니다." : "방장이 Spotify를 연결하면 자동 추가가 시작됩니다."}
+          </Text>
+          <View style={styles.inlineButtons}>
+            <Pressable style={styles.greenButtonSmall} onPress={onHostLogin}>
+              <Text style={styles.greenButtonText}>연결</Text>
+            </Pressable>
+            <Pressable style={styles.secondaryDarkButtonSmall} onPress={onOpenPlaylist}>
+              <Text style={styles.secondaryDarkText}>열기</Text>
+            </Pressable>
+            <Pressable style={styles.secondaryDarkButtonSmall} onPress={onRefresh}>
+              <Text style={styles.secondaryDarkText}>갱신</Text>
+            </Pressable>
           </View>
+        </View>
+      </View>
+
+      <View style={styles.infoCard}>
+        <Text style={styles.sectionTitle}>방 기록</Text>
+        <View style={styles.statLine}>
+          <Text style={styles.statLabel}>전체 신청</Text>
+          <Text style={styles.statValue}>{stats?.total_requests ?? requests.length}</Text>
+        </View>
+        <View style={styles.statLine}>
+          <Text style={styles.statLabel}>Spotify 추가</Text>
+          <Text style={styles.statValue}>{stats?.added_requests ?? 0}</Text>
+        </View>
+        <View style={styles.statLine}>
+          <Text style={styles.statLabel}>공유 플레이리스트</Text>
+          <Text style={styles.statValue}>{stats?.shared_playlists ?? 0}</Text>
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
+
+function ShareTab({ sharedPlaylists, openShareLogin, openUrl }) {
+  return (
+    <ScrollView contentContainerStyle={styles.tabScroll}>
+      <View style={styles.shareHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>공유 플레이리스트</Text>
+          <Text style={styles.mutedText}>방 사람들이 좋아하는 플레이리스트</Text>
+        </View>
+        <Pressable style={styles.greenButtonSmall} onPress={openShareLogin}>
+          <Text style={styles.greenButtonText}>내 것 공유</Text>
+        </Pressable>
+      </View>
+
+      {sharedPlaylists.length === 0 ? (
+        <Text style={styles.emptyText}>공유된 플레이리스트가 없습니다.</Text>
+      ) : (
+        sharedPlaylists.map((playlist) => (
+          <Pressable
+            key={playlist.id}
+            style={styles.playlistCard}
+            onPress={() => playlist.external_url && openUrl(playlist.external_url)}
+          >
+            {playlist.image_url ? (
+              <Image source={{ uri: playlist.image_url }} style={styles.playlistImage} />
+            ) : (
+              <AlbumFallback text={playlist.name} size={72} />
+            )}
+            <View style={styles.flex}>
+              <Text style={styles.itemTitle} numberOfLines={1}>{playlist.name}</Text>
+              <Text style={styles.mutedText} numberOfLines={1}>{playlist.owner_name}</Text>
+              <Text style={styles.softText}>{playlist.track_count}곡</Text>
+            </View>
+          </Pressable>
         ))
       )}
     </ScrollView>
   );
 }
 
-function SegmentButton({ active, label, onPress }) {
+function RightPanel({ room, stats, sharedPlaylists, openShareLogin, openUrl }) {
+  const qrUrl = `${API_URL}/api/rooms/${room.code}/qr`;
   return (
-    <Pressable style={[styles.segmentButton, active && styles.segmentButtonActive]} onPress={onPress}>
-      <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{label}</Text>
-    </Pressable>
+    <View style={styles.rightPanel}>
+      <Text style={styles.panelTitle}>{room.name}</Text>
+      <Image source={{ uri: qrUrl }} style={styles.sideQr} />
+      <Text style={styles.sideCode}>{room.code}</Text>
+
+      <View style={styles.sideCard}>
+        <Text style={styles.cardTitle}>취향</Text>
+        <Text style={styles.insightText}>{stats?.insight || "취향을 모으는 중이에요."}</Text>
+        {stats?.top_artists?.map((artist) => (
+          <View key={artist.name} style={styles.statLine}>
+            <Text style={styles.statLabel}>{artist.name}</Text>
+            <Text style={styles.statValue}>{artist.count}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.sideCard}>
+        <View style={styles.sideCardHeader}>
+          <Text style={styles.cardTitle}>공유</Text>
+          <Pressable onPress={openShareLogin}>
+            <Text style={styles.greenText}>추가</Text>
+          </Pressable>
+        </View>
+        {sharedPlaylists.slice(0, 3).map((playlist) => (
+          <Pressable key={playlist.id} style={styles.miniPlaylist} onPress={() => playlist.external_url && openUrl(playlist.external_url)}>
+            {playlist.image_url ? (
+              <Image source={{ uri: playlist.image_url }} style={styles.miniImage} />
+            ) : (
+              <AlbumFallback text={playlist.name} size={42} />
+            )}
+            <View style={styles.flex}>
+              <Text style={styles.miniTitle} numberOfLines={1}>{playlist.name}</Text>
+              <Text style={styles.mutedText} numberOfLines={1}>{playlist.owner_name}</Text>
+            </View>
+          </Pressable>
+        ))}
+      </View>
+    </View>
   );
 }
 
-function TrackRow({ track, actionLabel, disabled, onPress }) {
+function TrackListHeader() {
+  return (
+    <View style={styles.tableHeader}>
+      <Text style={[styles.tableHeadText, styles.indexCol]}>#</Text>
+      <Text style={[styles.tableHeadText, styles.titleCol]}>제목</Text>
+      <Text style={[styles.tableHeadText, styles.albumCol]}>앨범</Text>
+      <Text style={[styles.tableHeadText, styles.actionCol]}>추가</Text>
+    </View>
+  );
+}
+
+function TrackRow({ index, track, actionLabel, disabled, onPress }) {
   return (
     <View style={styles.trackRow}>
-      <AlbumArt track={track} />
-      <View style={styles.trackInfo}>
-        <Text style={styles.trackName} numberOfLines={1}>
-          {track.name}
-        </Text>
-        <Text style={styles.artistName} numberOfLines={1}>
-          {track.artists.join(", ")}
-        </Text>
-        <Text style={styles.albumName} numberOfLines={1}>
-          {track.album || "Single"}
-        </Text>
+      <Text style={[styles.trackIndex, styles.indexCol]}>{index}</Text>
+      <View style={[styles.trackTitleWrap, styles.titleCol]}>
+        <AlbumArt track={track} size={52} />
+        <View style={styles.flex}>
+          <Text style={styles.itemTitle} numberOfLines={1}>{track.name}</Text>
+          <Text style={styles.mutedText} numberOfLines={1}>{track.artists.join(", ")}</Text>
+        </View>
       </View>
-      <Pressable
-        style={[styles.secondaryButton, disabled && styles.buttonDisabled]}
-        disabled={disabled}
-        onPress={onPress}
-      >
-        <Text style={styles.secondaryButtonText}>{actionLabel}</Text>
+      <Text style={[styles.albumText, styles.albumCol]} numberOfLines={1}>{track.album || "Single"}</Text>
+      <Pressable style={[styles.addButton, disabled && styles.disabled]} onPress={onPress} disabled={disabled}>
+        <Text style={styles.addButtonText}>{actionLabel}</Text>
       </Pressable>
     </View>
   );
 }
 
-function AlbumArt({ track }) {
-  if (track?.image_url) {
-    return <Image source={{ uri: track.image_url }} style={styles.albumArt} />;
-  }
-
+function RequestRow({ request, index }) {
   return (
-    <View style={styles.albumFallback}>
-      <Text style={styles.albumFallbackText}>{track?.name?.slice(0, 1) || "P"}</Text>
+    <View style={styles.requestRow}>
+      <Text style={styles.trackIndex}>{index}</Text>
+      <AlbumArt track={request.track} size={44} />
+      <View style={styles.flex}>
+        <Text style={styles.itemTitle} numberOfLines={1}>{request.track.name}</Text>
+        <Text style={styles.mutedText} numberOfLines={1}>
+          {request.track.artists.join(", ")} · {request.requester_name}
+        </Text>
+      </View>
+      <Text style={request.status === "added" ? styles.statusAdded : styles.statusQueued}>
+        {request.status === "added" ? "추가됨" : request.status === "failed" ? "실패" : "대기"}
+      </Text>
     </View>
   );
+}
+
+function AlbumArt({ track, size }) {
+  if (track?.image_url) {
+    return <Image source={{ uri: track.image_url }} style={[styles.albumArt, { width: size, height: size }]} />;
+  }
+  return <AlbumFallback text={track?.name || "P"} size={size} />;
+}
+
+function AlbumFallback({ text, size }) {
+  return (
+    <View style={[styles.albumFallback, { width: size, height: size }]}>
+      <Text style={[styles.albumFallbackText, { fontSize: Math.max(16, size / 3) }]}>
+        {(text || "P").slice(0, 1)}
+      </Text>
+    </View>
+  );
+}
+
+function getInitialRoomCode() {
+  if (Platform.OS !== "web" || typeof window === "undefined") return "";
+  const fromQuery = new URLSearchParams(window.location.search).get("room");
+  return (fromQuery || window.localStorage.getItem("playlist-room-code") || "").toUpperCase();
+}
+
+function rememberRoom(code) {
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    window.localStorage.setItem("playlist-room-code", code);
+  }
+}
+
+function forgetRoom() {
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    window.localStorage.removeItem("playlist-room-code");
+  }
 }
 
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: "#F7F5EF"
+    backgroundColor: "#000000"
   },
-  screen: {
+  app: {
     flex: 1,
-    paddingHorizontal: 18,
-    paddingTop: 12
+    backgroundColor: "#000000"
   },
-  header: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 14
-  },
-  eyebrow: {
-    color: "#607064",
-    fontSize: 12,
-    fontWeight: "700",
-    textTransform: "uppercase"
-  },
-  title: {
-    color: "#17211D",
-    fontSize: 28,
-    fontWeight: "800"
-  },
-  queuePill: {
-    alignItems: "center",
-    backgroundColor: "#DDE8E2",
-    borderRadius: 8,
-    minWidth: 58,
-    paddingHorizontal: 12,
-    paddingVertical: 8
-  },
-  queueNumber: {
-    color: "#123D36",
-    fontSize: 18,
-    fontWeight: "800"
-  },
-  queueLabel: {
-    color: "#496257",
-    fontSize: 11,
-    fontWeight: "700"
-  },
-  nowPlaying: {
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderColor: "#E7E1D5",
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: "row",
-    gap: 12,
-    padding: 12
-  },
-  nowPlayingText: {
-    flex: 1
-  },
-  label: {
-    color: "#7D8477",
-    fontSize: 12,
-    fontWeight: "700",
-    marginBottom: 3
-  },
-  trackName: {
-    color: "#18231E",
-    fontSize: 16,
-    fontWeight: "800"
-  },
-  artistName: {
-    color: "#56635B",
-    fontSize: 13,
-    marginTop: 3
-  },
-  albumName: {
-    color: "#8B8171",
-    fontSize: 12,
-    marginTop: 3
-  },
-  segmented: {
-    backgroundColor: "#E8E4DA",
-    borderRadius: 8,
-    flexDirection: "row",
-    gap: 6,
-    marginVertical: 14,
-    padding: 4
-  },
-  segmentButton: {
-    alignItems: "center",
-    borderRadius: 6,
+  shell: {
     flex: 1,
-    paddingVertical: 10
-  },
-  segmentButtonActive: {
-    backgroundColor: "#FFFFFF"
-  },
-  segmentText: {
-    color: "#687066",
-    fontSize: 14,
-    fontWeight: "800"
-  },
-  segmentTextActive: {
-    color: "#173F39"
-  },
-  error: {
-    backgroundColor: "#F8DFD9",
-    borderRadius: 8,
-    color: "#8A281A",
-    fontSize: 13,
-    marginBottom: 10,
-    padding: 10
-  },
-  content: {
-    flex: 1
-  },
-  searchRow: {
     flexDirection: "row",
     gap: 8,
-    marginBottom: 8
+    padding: 8
   },
-  searchInput: {
-    backgroundColor: "#FFFFFF",
-    borderColor: "#E1DCCD",
-    borderRadius: 8,
-    borderWidth: 1,
-    color: "#17211D",
-    flex: 1,
-    fontSize: 15,
-    minHeight: 46,
-    paddingHorizontal: 12
+  shellMobile: {
+    flexDirection: "column",
+    padding: 0
   },
-  nameInput: {
-    backgroundColor: "#FFFFFF",
-    borderColor: "#E1DCCD",
-    borderRadius: 8,
-    borderWidth: 1,
-    color: "#17211D",
-    fontSize: 15,
-    minHeight: 44,
-    paddingHorizontal: 12
-  },
-  primaryButton: {
-    alignItems: "center",
-    backgroundColor: "#1F6F64",
-    borderRadius: 8,
+  joinWrap: {
+    flexGrow: 1,
     justifyContent: "center",
-    minHeight: 46,
-    paddingHorizontal: 18
+    padding: 20,
+    backgroundColor: "#000000"
   },
-  primaryButtonText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "800"
+  brandBlock: {
+    maxWidth: 760,
+    marginBottom: 28
   },
-  secondaryButton: {
-    alignItems: "center",
-    backgroundColor: "#DDE8E2",
-    borderRadius: 8,
-    justifyContent: "center",
-    minHeight: 38,
-    paddingHorizontal: 14
-  },
-  secondaryButtonText: {
-    color: "#17443D",
+  brandMark: {
+    color: "#1ED760",
     fontSize: 13,
-    fontWeight: "800"
+    fontWeight: "900",
+    marginBottom: 10
   },
-  buttonDisabled: {
-    opacity: 0.55
+  joinTitle: {
+    color: "#FFFFFF",
+    fontSize: 42,
+    fontWeight: "900"
   },
-  list: {
-    gap: 10,
-    paddingBottom: 28,
-    paddingTop: 12
+  joinSubtitle: {
+    color: "#B3B3B3",
+    fontSize: 16,
+    marginTop: 10
   },
-  trackRow: {
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderColor: "#E7E1D5",
-    borderRadius: 8,
-    borderWidth: 1,
+  joinGrid: {
     flexDirection: "row",
-    gap: 12,
-    padding: 10
+    flexWrap: "wrap",
+    gap: 14
   },
-  trackInfo: {
+  joinCard: {
+    backgroundColor: "#121212",
+    borderRadius: 8,
+    padding: 18,
+    width: 340,
+    maxWidth: "100%",
+    gap: 12
+  },
+  libraryPanel: {
+    width: 320,
+    backgroundColor: "#121212",
+    borderRadius: 8,
+    padding: 16
+  },
+  mainPanel: {
     flex: 1,
-    minWidth: 0
-  },
-  albumArt: {
-    backgroundColor: "#D9DED8",
+    backgroundColor: "#121212",
     borderRadius: 8,
-    height: 54,
-    width: 54
+    overflow: "hidden"
   },
-  albumFallback: {
+  rightPanel: {
+    width: 300,
+    backgroundColor: "#121212",
+    borderRadius: 8,
+    padding: 16,
+    gap: 14
+  },
+  libraryHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "#D9DED8",
-    borderRadius: 8,
-    height: 54,
-    justifyContent: "center",
-    width: 54
+    marginBottom: 16
   },
-  albumFallbackText: {
-    color: "#1F463F",
+  panelTitle: {
+    color: "#FFFFFF",
     fontSize: 20,
     fontWeight: "900"
   },
-  loadingArea: {
-    alignItems: "center",
-    flex: 1,
-    justifyContent: "center"
-  },
-  empty: {
-    color: "#667068",
-    fontSize: 14,
-    padding: 18,
-    textAlign: "center"
-  },
-  adminHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between"
-  },
-  sectionTitle: {
-    color: "#17211D",
-    fontSize: 20,
-    fontWeight: "800"
-  },
-  helperText: {
-    color: "#6C746D",
+  panelSubtitle: {
+    color: "#B3B3B3",
     fontSize: 13,
-    marginTop: 3
+    fontWeight: "800",
+    marginBottom: 8,
+    marginTop: 18
   },
-  requestRow: {
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderColor: "#E7E1D5",
-    borderRadius: 8,
-    borderWidth: 1,
+  libraryItem: {
     flexDirection: "row",
-    gap: 10,
-    padding: 12
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 8
   },
-  requestMain: {
+  libraryItemActive: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#2A2A2A",
+    borderRadius: 6,
+    padding: 8
+  },
+  hero: {
+    minHeight: 260,
+    backgroundColor: "#9A2500",
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 24,
+    padding: 28
+  },
+  heroArtWrap: {
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 16
+  },
+  heroArt: {
+    width: 132,
+    height: 132,
+    borderRadius: 6,
+    backgroundColor: "#282828"
+  },
+  heroCopy: {
     flex: 1,
     minWidth: 0
   },
-  statusText: {
-    color: "#1F6F64",
-    fontSize: 12,
+  heroType: {
+    color: "#FFFFFF",
+    fontSize: 13,
     fontWeight: "800",
-    marginTop: 6
+    marginBottom: 8
   },
-  adminActions: {
+  heroTitle: {
+    color: "#FFFFFF",
+    fontSize: 52,
+    fontWeight: "900"
+  },
+  heroMeta: {
+    color: "#F4D8CC",
+    fontSize: 15,
+    fontWeight: "700",
+    marginTop: 8
+  },
+  heroActions: {
     flexDirection: "row",
-    gap: 6
-  },
-  smallButton: {
     alignItems: "center",
+    gap: 12,
+    marginTop: 18,
+    flexWrap: "wrap"
+  },
+  heroInsight: {
+    color: "#F2C9BA",
+    fontSize: 14,
+    marginTop: 12
+  },
+  playButton: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: "#1ED760",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  playButtonText: {
+    color: "#000000",
+    fontSize: 24,
+    fontWeight: "900",
+    marginLeft: 3
+  },
+  pillButton: {
+    backgroundColor: "rgba(0,0,0,0.26)",
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 11
+  },
+  pillButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900"
+  },
+  iconPill: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingVertical: 10
+  },
+  iconPillText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "800"
+  },
+  tabBar: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 24,
+    paddingTop: 18,
+    backgroundColor: "#121212"
+  },
+  tabButton: {
+    borderRadius: 999,
+    backgroundColor: "#232323",
+    paddingHorizontal: 18,
+    paddingVertical: 10
+  },
+  tabButtonActive: {
+    backgroundColor: "#FFFFFF"
+  },
+  tabText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900"
+  },
+  tabTextActive: {
+    color: "#000000"
+  },
+  tabContent: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 18
+  },
+  tabScroll: {
+    padding: 24,
+    gap: 14
+  },
+  searchControls: {
+    flexDirection: "row",
+    gap: 10,
+    flexWrap: "wrap",
+    marginBottom: 16
+  },
+  input: {
+    backgroundColor: "#242424",
     borderRadius: 8,
+    color: "#FFFFFF",
+    minHeight: 48,
+    paddingHorizontal: 14,
+    fontSize: 15
+  },
+  searchInput: {
+    backgroundColor: "#242424",
+    borderRadius: 24,
+    color: "#FFFFFF",
+    flex: 1,
+    minWidth: 220,
+    minHeight: 48,
+    paddingHorizontal: 18,
+    fontSize: 15
+  },
+  nameInput: {
+    backgroundColor: "#242424",
+    borderRadius: 24,
+    color: "#FFFFFF",
+    width: 160,
+    minHeight: 48,
+    paddingHorizontal: 16,
+    fontSize: 15
+  },
+  greenButton: {
+    backgroundColor: "#1ED760",
+    borderRadius: 999,
+    minHeight: 48,
+    alignItems: "center",
     justifyContent: "center",
-    minHeight: 36,
-    paddingHorizontal: 10
+    paddingHorizontal: 18
   },
-  approveButton: {
-    backgroundColor: "#1F6F64"
+  greenButtonSmall: {
+    backgroundColor: "#1ED760",
+    borderRadius: 999,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18
   },
-  rejectButton: {
-    backgroundColor: "#F0D8D2"
+  greenButtonText: {
+    color: "#000000",
+    fontSize: 14,
+    fontWeight: "900"
   },
-  smallButtonText: {
+  secondaryDarkButton: {
+    backgroundColor: "#2A2A2A",
+    borderRadius: 999,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18
+  },
+  secondaryDarkButtonSmall: {
+    backgroundColor: "#2A2A2A",
+    borderRadius: 999,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16
+  },
+  secondaryDarkText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900"
+  },
+  roundButton: {
+    backgroundColor: "#242424",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8
+  },
+  roundButtonText: {
     color: "#FFFFFF",
     fontSize: 12,
+    fontWeight: "900"
+  },
+  notice: {
+    color: "#1ED760",
+    marginHorizontal: 24,
+    marginTop: 12,
+    fontSize: 14,
     fontWeight: "800"
   },
-  rejectButtonText: {
-    color: "#8A281A",
+  error: {
+    color: "#FFB4A8",
+    backgroundColor: "#3A1712",
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 12,
+    overflow: "hidden"
+  },
+  trackList: {
+    paddingBottom: 24
+  },
+  tableHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "#2A2A2A",
+    paddingVertical: 10
+  },
+  tableHeadText: {
+    color: "#A7A7A7",
+    fontSize: 13,
+    fontWeight: "800"
+  },
+  indexCol: {
+    width: 34
+  },
+  titleCol: {
+    flex: 1.4
+  },
+  albumCol: {
+    flex: 0.8
+  },
+  actionCol: {
+    width: 78,
+    textAlign: "right"
+  },
+  trackRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 68,
+    borderRadius: 6,
+    paddingHorizontal: 8
+  },
+  trackIndex: {
+    color: "#B3B3B3",
+    fontSize: 15,
+    fontWeight: "700"
+  },
+  trackTitleWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    minWidth: 0
+  },
+  albumText: {
+    color: "#A7A7A7",
+    fontSize: 14
+  },
+  addButton: {
+    backgroundColor: "#2A2A2A",
+    borderRadius: 999,
+    minHeight: 36,
+    width: 78,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  addButtonText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "900"
+  },
+  disabled: {
+    opacity: 0.55
+  },
+  recentBlock: {
+    borderTopWidth: 1,
+    borderTopColor: "#2A2A2A",
+    paddingTop: 18,
+    paddingBottom: 24
+  },
+  requestRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 8
+  },
+  statusAdded: {
+    color: "#1ED760",
+    fontSize: 12,
+    fontWeight: "900"
+  },
+  statusQueued: {
+    color: "#B3B3B3",
     fontSize: 12,
     fontWeight: "800"
+  },
+  roomGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 14
+  },
+  infoCard: {
+    backgroundColor: "#181818",
+    borderRadius: 8,
+    padding: 18,
+    minWidth: 260,
+    flex: 1,
+    gap: 10
+  },
+  cardTitle: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "900"
+  },
+  roomCode: {
+    color: "#FFFFFF",
+    fontSize: 42,
+    fontWeight: "900"
+  },
+  qrImage: {
+    width: 160,
+    height: 160,
+    borderRadius: 8,
+    backgroundColor: "#FFFFFF"
+  },
+  inlineButtons: {
+    flexDirection: "row",
+    gap: 8,
+    flexWrap: "wrap",
+    marginTop: 8
+  },
+  statLine: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 6
+  },
+  statLabel: {
+    color: "#B3B3B3",
+    fontSize: 14
+  },
+  statValue: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "900"
+  },
+  shareHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12
+  },
+  playlistCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#181818",
+    borderRadius: 8,
+    padding: 12,
+    gap: 12
+  },
+  playlistImage: {
+    width: 72,
+    height: 72,
+    borderRadius: 6,
+    backgroundColor: "#282828"
+  },
+  sideQr: {
+    width: 150,
+    height: 150,
+    borderRadius: 8,
+    backgroundColor: "#FFFFFF",
+    alignSelf: "center"
+  },
+  sideCode: {
+    color: "#FFFFFF",
+    fontSize: 30,
+    fontWeight: "900",
+    textAlign: "center"
+  },
+  sideCard: {
+    backgroundColor: "#181818",
+    borderRadius: 8,
+    padding: 14,
+    gap: 8
+  },
+  sideCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center"
+  },
+  insightText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    lineHeight: 20
+  },
+  miniPlaylist: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10
+  },
+  miniImage: {
+    width: 42,
+    height: 42,
+    borderRadius: 5,
+    backgroundColor: "#282828"
+  },
+  miniTitle: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "900"
+  },
+  albumArt: {
+    borderRadius: 5,
+    backgroundColor: "#282828"
+  },
+  albumFallback: {
+    borderRadius: 6,
+    backgroundColor: "#1ED760",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  albumFallbackText: {
+    color: "#000000",
+    fontWeight: "900"
+  },
+  sectionTitle: {
+    color: "#FFFFFF",
+    fontSize: 20,
+    fontWeight: "900",
+    marginBottom: 8
+  },
+  itemTitle: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "800"
+  },
+  mutedText: {
+    color: "#A7A7A7",
+    fontSize: 13,
+    marginTop: 3
+  },
+  softText: {
+    color: "#777777",
+    fontSize: 12,
+    marginTop: 4
+  },
+  greenText: {
+    color: "#1ED760",
+    fontSize: 13,
+    fontWeight: "900"
+  },
+  emptyText: {
+    color: "#A7A7A7",
+    paddingVertical: 28,
+    textAlign: "center"
+  },
+  emptySideText: {
+    color: "#777777",
+    fontSize: 13,
+    paddingVertical: 8
+  },
+  loadingArea: {
+    padding: 28,
+    alignItems: "center"
+  },
+  flex: {
+    flex: 1,
+    minWidth: 0
   }
 });

@@ -110,8 +110,11 @@ jobs:
                     required: false
                 environment:
                   PORT: 8000
+                  DATABASE_URL: sqlite:////data/playlist.db
                 expose:
                   - "8000"
+                volumes:
+                  - playlist-data:/data
                 networks:
                   - playlist
 
@@ -129,13 +132,18 @@ jobs:
             networks:
               playlist:
                 name: playlist
+
+            volumes:
+              playlist-data:
+                name: playlist-data
             COMPOSE
 
             cat > .env <<ENV
-            APP_NAME=Playlist Request Prototype
+            APP_NAME=Room Playlist
             APP_HOST_PORT=${APP_HOST_PORT}
             NGINX_SSL_PORT=${NGINX_SSL_PORT}
             PUBLIC_SSL_PORT=${PUBLIC_SSL_PORT}
+            PUBLIC_APP_URL=https://supdobby.me:${PUBLIC_SSL_PORT}
             IMAGE_REGISTRY=${IMAGE_REGISTRY}
             IMAGE_NAMESPACE=${IMAGE_NAMESPACE}
             IMAGE_TAG=${IMAGE_TAG}
@@ -146,7 +154,8 @@ jobs:
             SPOTIFY_REFRESH_TOKEN=${SPOTIFY_REFRESH_TOKEN:-}
             SPOTIFY_ACCESS_TOKEN=${SPOTIFY_ACCESS_TOKEN:-}
             SPOTIFY_PLAYLIST_ID=${SPOTIFY_PLAYLIST_ID:-}
-            SPOTIFY_SCOPE=playlist-modify-public playlist-modify-private
+            SPOTIFY_SCOPE=playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative
+            DATABASE_URL=sqlite:////data/playlist.db
             ENV
 
             cat > setup-nginx.sh <<'NGINX_SCRIPT'
