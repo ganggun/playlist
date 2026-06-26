@@ -154,7 +154,7 @@ export default function App() {
       if (created.status === "added") {
         setNotice("플레이리스트에 추가했습니다.");
       } else if (created.status === "failed") {
-        setError("신청은 저장했지만 Spotify 추가에 실패했습니다.");
+        setError(spotifyFailureMessage(created));
       } else {
         setNotice("신청을 저장했습니다. 방장 Spotify 연결 후 자동 추가됩니다.");
       }
@@ -676,6 +676,7 @@ function TrackRow({ index, track, actionLabel, disabled, onPress }) {
 }
 
 function RequestRow({ request, index }) {
+  const failureReason = request.status === "failed" ? spotifyFailureReason(request) : "";
   return (
     <View style={styles.requestRow}>
       <Text style={styles.trackIndex}>{index}</Text>
@@ -685,6 +686,9 @@ function RequestRow({ request, index }) {
         <Text style={styles.mutedText} numberOfLines={1}>
           {request.track.artists.join(", ")} · {request.requester_name}
         </Text>
+        {failureReason ? (
+          <Text style={styles.failureReason} numberOfLines={2}>{failureReason}</Text>
+        ) : null}
       </View>
       <Text style={request.status === "added" ? styles.statusAdded : styles.statusQueued}>
         {request.status === "added" ? "추가됨" : request.status === "failed" ? "실패" : "대기"}
@@ -726,6 +730,19 @@ function forgetRoom() {
   if (Platform.OS === "web" && typeof window !== "undefined") {
     window.localStorage.removeItem("playlist-room-code");
   }
+}
+
+function spotifyFailureReason(request) {
+  const reason = request?.spotify?.reason;
+  if (!reason || typeof reason !== "string") return "";
+  return reason.length > 180 ? `${reason.slice(0, 180)}...` : reason;
+}
+
+function spotifyFailureMessage(request) {
+  const reason = spotifyFailureReason(request);
+  return reason
+    ? `신청은 저장했지만 Spotify 추가에 실패했습니다. 사유: ${reason}`
+    : "신청은 저장했지만 Spotify 추가에 실패했습니다.";
 }
 
 const styles = StyleSheet.create({
@@ -1146,6 +1163,11 @@ const styles = StyleSheet.create({
     color: "#B3B3B3",
     fontSize: 12,
     fontWeight: "800"
+  },
+  failureReason: {
+    color: "#FFB4A8",
+    fontSize: 12,
+    marginTop: 4
   },
   roomGrid: {
     flexDirection: "row",

@@ -112,6 +112,9 @@ class SpotifyClient:
             return {"mode": "demo", "added": False, "reason": "Spotify token or playlist id is empty"}
 
         uri = track.spotify_uri or f"spotify:track:{track.id}"
+        if not uri.startswith("spotify:track:") or track.id.startswith("demo-"):
+            raise SpotifyAuthError("Spotify에 추가할 수 없는 데모/잘못된 트랙입니다. 다시 검색해서 실제 Spotify 곡을 선택하세요.")
+
         headers = {"Authorization": f"Bearer {user_token}"}
         payload = {"uris": [uri]}
 
@@ -121,7 +124,11 @@ class SpotifyClient:
                 headers=headers,
                 json=payload,
             )
+        try:
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._api_error_message(response, "Spotify playlist add failed")
+            raise SpotifyAuthError(detail, status_code=response.status_code) from exc
 
         return {"mode": "spotify", "added": True, "snapshot_id": response.json().get("snapshot_id")}
 
@@ -230,6 +237,22 @@ class SpotifyClient:
         if error:
             return str(error)
         return f"Spotify token request failed with status {response.status_code}"
+
+    @staticmethod
+    def _api_error_message(response: httpx.Response, fallback: str) -> str:
+        try:
+            data = response.json()
+        except ValueError:
+            return f"{fallback} with status {response.status_code}"
+
+        error = data.get("error") if isinstance(data, dict) else None
+        if isinstance(error, dict):
+            status = error.get("status", response.status_code)
+            message = error.get("message", fallback)
+            return f"Spotify API error ({status}): {message}"
+        if error:
+            return f"Spotify API error ({response.status_code}): {error}"
+        return f"{fallback} with status {response.status_code}"
 
     @staticmethod
     def _parse_track(item: dict[str, Any]) -> Track:
