@@ -120,7 +120,7 @@ class SpotifyClient:
 
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
-                f"https://api.spotify.com/v1/playlists/{target_playlist_id}/tracks",
+                f"https://api.spotify.com/v1/playlists/{target_playlist_id}/items",
                 headers=headers,
                 json=payload,
             )
