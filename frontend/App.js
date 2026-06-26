@@ -482,11 +482,16 @@ function SearchTab({
         </View>
       ) : (
         <FlatList
+          style={styles.trackScroller}
           data={tracks}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.trackList}
+          keyboardShouldPersistTaps="handled"
           ListHeaderComponent={<TrackListHeader />}
           ListEmptyComponent={<Text style={styles.emptyText}>검색 결과가 없습니다.</Text>}
+          ListFooterComponent={requests.length ? (
+            <RecentRequests requests={requests.slice(0, 5)} />
+          ) : null}
           renderItem={({ item, index }) => (
             <TrackRow
               index={index + 1}
@@ -498,15 +503,17 @@ function SearchTab({
           )}
         />
       )}
+    </View>
+  );
+}
 
-      {requests.length ? (
-        <View style={styles.recentBlock}>
-          <Text style={styles.sectionTitle}>최근 추가</Text>
-          {requests.slice(0, 5).map((request, index) => (
-            <RequestRow key={request.id} request={request} index={index + 1} />
-          ))}
-        </View>
-      ) : null}
+function RecentRequests({ requests }) {
+  return (
+    <View style={styles.recentBlock}>
+      <Text style={styles.sectionTitle}>최근 추가</Text>
+      {requests.map((request, index) => (
+        <RequestRow key={request.id} request={request} index={index + 1} />
+      ))}
     </View>
   );
 }
@@ -813,7 +820,8 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#121212",
     borderRadius: 8,
-    overflow: "hidden"
+    overflow: "hidden",
+    minHeight: 0
   },
   rightPanel: {
     width: 300,
@@ -969,7 +977,8 @@ const styles = StyleSheet.create({
   tabContent: {
     flex: 1,
     paddingHorizontal: 24,
-    paddingTop: 18
+    paddingTop: 18,
+    minHeight: 0
   },
   tabScroll: {
     padding: 24,
@@ -1078,6 +1087,10 @@ const styles = StyleSheet.create({
   },
   trackList: {
     paddingBottom: 24
+  },
+  trackScroller: {
+    flex: 1,
+    minHeight: 0
   },
   tableHeader: {
     flexDirection: "row",
