@@ -34,7 +34,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("search");
   const [roomCode, setRoomCode] = useState("");
   const [newRoomName, setNewRoomName] = useState("");
-  const [hostName, setHostName] = useState("");
   const [query, setQuery] = useState("");
   const [requesterName, setRequesterName] = useState("");
   const [tracks, setTracks] = useState([]);
@@ -107,8 +106,7 @@ export default function App() {
       const created = await api("/api/rooms", {
         method: "POST",
         body: JSON.stringify({
-          name: newRoomName.trim(),
-          host_name: hostName.trim() || "방장"
+          name: newRoomName.trim()
         })
       });
       setRoom(created);
@@ -216,8 +214,6 @@ export default function App() {
             setRoomCode={setRoomCode}
             newRoomName={newRoomName}
             setNewRoomName={setNewRoomName}
-            hostName={hostName}
-            setHostName={setHostName}
             loading={loading}
             error={error}
             joinRoom={joinRoom}
@@ -311,8 +307,6 @@ function JoinScreen({
   setRoomCode,
   newRoomName,
   setNewRoomName,
-  hostName,
-  setHostName,
   loading,
   error,
   joinRoom,
@@ -349,13 +343,6 @@ function JoinScreen({
             value={newRoomName}
             onChangeText={setNewRoomName}
             placeholder="예: 월암중 축제"
-            placeholderTextColor="#6F6F6F"
-            style={styles.input}
-          />
-          <TextInput
-            value={hostName}
-            onChangeText={setHostName}
-            placeholder="방장 이름"
             placeholderTextColor="#6F6F6F"
             style={styles.input}
           />
