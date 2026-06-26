@@ -135,7 +135,6 @@ class SpotifyClient:
     async def create_playlist(
         self,
         access_token: str,
-        user_id: str,
         name: str,
         description: str,
     ) -> dict[str, Any]:
@@ -143,7 +142,7 @@ class SpotifyClient:
         payload = {"name": name, "description": description, "public": False}
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(
-                f"https://api.spotify.com/v1/users/{user_id}/playlists",
+                "https://api.spotify.com/v1/me/playlists",
                 headers=headers,
                 json=payload,
             )

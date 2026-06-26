@@ -162,7 +162,7 @@ def _success_html(title: str, body: str) -> HTMLResponse:
           <head><title>{escape(title)}</title></head>
           <body style="background:#121212;color:#fff;font-family:system-ui;max-width:720px;margin:48px auto;line-height:1.55;">
             <h1>{escape(title)}</h1>
-            <p>{body}</p>
+            {body}
           </body>
         </html>
         """
@@ -176,15 +176,35 @@ def _spotify_state_parts(state: str | None) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _spotify_retry_html(room: RoomORM, mode: str, detail: str) -> HTMLResponse:
+def _spotify_retry_html(room: RoomORM, mode: str, detail: str, lead: str | None = None) -> HTMLResponse:
     path = "spotify/share/login" if mode == "share" else "spotify/login"
     retry_url = f"{settings.resolved_public_app_url}/api/rooms/{room.code}/{path}"
     body = f"""
-      <p>Spotify 로그인 코드가 만료되었거나 이미 사용되었습니다.</p>
+      <p>{escape(lead or "Spotify 로그인 코드가 만료되었거나 이미 사용되었습니다.")}</p>
       <p style="color:#b3b3b3;">{escape(detail)}</p>
       <p><a href="{retry_url}" style="display:inline-block;background:#1ed760;color:#000;text-decoration:none;font-weight:800;border-radius:999px;padding:12px 18px;">다시 연결</a></p>
     """
     return _success_html("Spotify 연결을 다시 시도하세요", body)
+
+
+def _external_error_detail(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            data = response.json()
+        except ValueError:
+            return f"{type(exc).__name__}: HTTP {response.status_code}"
+
+        error = data.get("error") if isinstance(data, dict) else None
+        if isinstance(error, dict):
+            status_code = error.get("status", response.status_code)
+            message = error.get("message", "Spotify API request failed")
+            return f"Spotify API error ({status_code}): {message}"
+        if error:
+            return f"Spotify API error ({response.status_code}): {error}"
+        return f"{type(exc).__name__}: HTTP {response.status_code}"
+
+    return str(exc) or type(exc).__name__
 
 
 @app.get("/")
@@ -414,8 +434,6 @@ async def spotify_callback(
         room = _get_room(db, room_code)
         access_token = token_data.get("access_token", "")
         refresh_token = token_data.get("refresh_token") or room.host_spotify_refresh_token
-        user = await spotify.get_current_user(access_token)
-        display_name = user.get("display_name") or user.get("id") or "Spotify User"
 
         if mode == "host":
             if not refresh_token:
@@ -424,33 +442,54 @@ async def spotify_callback(
                     detail="Spotify did not return a refresh token. Try reconnecting with consent.",
                 )
 
-            room.host_spotify_user_id = user.get("id")
-            room.host_spotify_display_name = display_name
             room.host_spotify_refresh_token = refresh_token
 
             if not room.spotify_playlist_id:
-                playlist = await spotify.create_playlist(
-                    access_token=access_token,
-                    user_id=user["id"],
-                    name=f"{room.name} 신청곡",
-                    description=f"{room.name} 방에서 함께 채우는 신청곡 플레이리스트",
-                )
+                try:
+                    playlist = await spotify.create_playlist(
+                        access_token=access_token,
+                        name=f"{room.name} 신청곡",
+                        description=f"{room.name} 방에서 함께 채우는 신청곡 플레이리스트",
+                    )
+                except Exception as exc:
+                    return _spotify_retry_html(
+                        room,
+                        mode,
+                        _external_error_detail(exc),
+                        "Spotify 플레이리스트 생성 중 오류가 발생했습니다.",
+                    )
+
                 images = playlist.get("images") or []
+                owner = playlist.get("owner") or {}
+                room.host_spotify_user_id = owner.get("id")
+                room.host_spotify_display_name = owner.get("display_name") or owner.get("id") or room.host_name
                 room.spotify_playlist_id = playlist.get("id")
                 room.spotify_playlist_name = playlist.get("name")
                 room.spotify_playlist_url = (playlist.get("external_urls") or {}).get("spotify")
                 room.spotify_playlist_image_url = images[0].get("url") if images else None
+            elif not room.host_spotify_display_name:
+                room.host_spotify_display_name = room.host_name
 
             db.commit()
             return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&spotify=connected")
 
         if mode == "share":
-            playlists = await spotify.get_user_playlists(access_token, limit=8)
+            try:
+                playlists = await spotify.get_user_playlists(access_token, limit=8)
+            except Exception as exc:
+                return _spotify_retry_html(
+                    room,
+                    mode,
+                    _external_error_detail(exc),
+                    "Spotify 플레이리스트 조회 중 오류가 발생했습니다.",
+                )
+
             saved = 0
             for item in playlists:
                 data = _playlist_payload(item)
                 if not data["playlist_id"]:
                     continue
+                owner = item.get("owner") or {}
                 existing = (
                     db.query(SharedPlaylistORM)
                     .filter(
@@ -460,8 +499,8 @@ async def spotify_callback(
                     .first()
                 )
                 target = existing or SharedPlaylistORM(room_id=room.id, playlist_id=data["playlist_id"])
-                target.owner_spotify_user_id = user.get("id")
-                target.owner_name = display_name
+                target.owner_spotify_user_id = owner.get("id")
+                target.owner_name = owner.get("display_name") or owner.get("id") or "Spotify User"
                 target.name = data["name"]
                 target.description = data["description"]
                 target.image_url = data["image_url"]
