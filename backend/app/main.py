@@ -169,6 +169,24 @@ def _success_html(title: str, body: str) -> HTMLResponse:
     )
 
 
+def _spotify_state_parts(state: str | None) -> tuple[str | None, str | None]:
+    if state and ":" in state:
+        mode, room_code = state.split(":", 1)
+        return mode, room_code
+    return None, None
+
+
+def _spotify_retry_html(room: RoomORM, mode: str, detail: str) -> HTMLResponse:
+    path = "spotify/share/login" if mode == "share" else "spotify/login"
+    retry_url = f"{settings.resolved_public_app_url}/api/rooms/{room.code}/{path}"
+    body = f"""
+      <p>Spotify 로그인 코드가 만료되었거나 이미 사용되었습니다.</p>
+      <p style="color:#b3b3b3;">{escape(detail)}</p>
+      <p><a href="{retry_url}" style="display:inline-block;background:#1ed760;color:#000;text-decoration:none;font-weight:800;border-radius:999px;padding:12px 18px;">다시 연결</a></p>
+    """
+    return _success_html("Spotify 연결을 다시 시도하세요", body)
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {"name": settings.app_name, "status": "ok"}
@@ -364,16 +382,24 @@ async def spotify_callback(
     state: str | None = None,
     error: str | None = None,
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     if error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
 
     if not code:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Spotify code")
 
+    mode, room_code = _spotify_state_parts(state)
+
     try:
         token_data = await spotify.exchange_code(code)
     except SpotifyAuthError as exc:
+        if mode and room_code:
+            room = _get_room(db, room_code)
+            if mode == "host" and room.host_spotify_refresh_token and room.spotify_playlist_id:
+                return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&spotify=connected")
+            return _spotify_retry_html(room, mode, str(exc))
+
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
@@ -384,8 +410,7 @@ async def spotify_callback(
             detail="Spotify token exchange failed",
         ) from exc
 
-    if state and ":" in state:
-        mode, room_code = state.split(":", 1)
+    if mode and room_code:
         room = _get_room(db, room_code)
         access_token = token_data.get("access_token", "")
         refresh_token = token_data.get("refresh_token") or room.host_spotify_refresh_token

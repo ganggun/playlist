@@ -167,6 +167,10 @@ export default function App() {
 
   async function openUrl(url) {
     try {
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        window.location.assign(url);
+        return;
+      }
       await Linking.openURL(url);
     } catch (err) {
       Alert.alert("열 수 없음", url);
