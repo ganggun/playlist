@@ -85,6 +85,12 @@ def _json_dict(value: str) -> dict[str, Any]:
         return {}
 
 
+def _display_spotify_name(display_name: str | None, user_id: str | None, fallback: str) -> str:
+    if display_name and display_name != user_id:
+        return display_name
+    return fallback
+
+
 def _room_to_schema(db: Session, room: RoomORM) -> RoomDetail:
     request_count = db.query(func.count(SongRequestORM.id)).filter(SongRequestORM.room_id == room.id).scalar() or 0
     shared_count = db.query(func.count(SharedPlaylistORM.id)).filter(SharedPlaylistORM.room_id == room.id).scalar() or 0
@@ -93,7 +99,11 @@ def _room_to_schema(db: Session, room: RoomORM) -> RoomDetail:
         code=room.code,
         name=room.name,
         host_name=room.host_name,
-        host_spotify_display_name=room.host_spotify_display_name,
+        host_spotify_display_name=_display_spotify_name(
+            room.host_spotify_display_name,
+            room.host_spotify_user_id,
+            room.host_name,
+        ),
         spotify_connected=bool(room.host_spotify_refresh_token and room.spotify_playlist_id),
         spotify_playlist_id=room.spotify_playlist_id,
         spotify_playlist_name=room.spotify_playlist_name,
@@ -131,7 +141,7 @@ def _request_to_schema(row: SongRequestORM) -> RoomSongRequest:
 def _shared_to_schema(row: SharedPlaylistORM) -> SharedPlaylist:
     return SharedPlaylist(
         id=row.id,
-        owner_name=row.owner_name,
+        owner_name=_display_spotify_name(row.owner_name, row.owner_spotify_user_id, "Spotify User"),
         playlist_id=row.playlist_id,
         name=row.name,
         description=row.description,
@@ -461,7 +471,7 @@ async def spotify_callback(
             images = playlist.get("images") or []
             owner = playlist.get("owner") or {}
             room.host_spotify_user_id = owner.get("id")
-            room.host_spotify_display_name = owner.get("display_name") or owner.get("id") or room.host_name
+            room.host_spotify_display_name = owner.get("display_name") or room.host_name
             room.spotify_playlist_id = playlist.get("id")
             room.spotify_playlist_name = playlist.get("name")
             room.spotify_playlist_url = (playlist.get("external_urls") or {}).get("spotify")
@@ -497,7 +507,7 @@ async def spotify_callback(
                 )
                 target = existing or SharedPlaylistORM(room_id=room.id, playlist_id=data["playlist_id"])
                 target.owner_spotify_user_id = owner.get("id")
-                target.owner_name = owner.get("display_name") or owner.get("id") or "Spotify User"
+                target.owner_name = owner.get("display_name") or "Spotify User"
                 target.name = data["name"]
                 target.description = data["description"]
                 target.image_url = data["image_url"]
