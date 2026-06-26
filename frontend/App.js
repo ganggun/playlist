@@ -179,6 +179,31 @@ export default function App() {
     if (room) openUrl(`${API_URL}/api/rooms/${room.code}/spotify/login`);
   }
 
+  async function disconnectHostSpotify() {
+    if (!room) return;
+
+    if (
+      Platform.OS === "web"
+      && typeof window !== "undefined"
+      && !window.confirm("방장 Spotify 연결을 끊을까요? 기존 Spotify 플레이리스트 자체는 삭제되지 않습니다.")
+    ) {
+      return;
+    }
+
+    setLoading(true);
+    setNotice("");
+    setError("");
+    try {
+      await api(`/api/rooms/${room.code}/spotify`, { method: "DELETE" });
+      await loadRoom(room.code);
+      setNotice("방장 Spotify 연결을 끊었습니다.");
+    } catch (err) {
+      setError("방장 Spotify 연결을 끊지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function openShareLogin() {
     if (room) openUrl(`${API_URL}/api/rooms/${room.code}/spotify/share/login`);
   }
@@ -272,6 +297,7 @@ export default function App() {
                   stats={stats}
                   requests={requests}
                   onHostLogin={openHostLogin}
+                  onHostDisconnect={disconnectHostSpotify}
                   onRefresh={() => loadRoom(room.code)}
                   onOpenPlaylist={() => room.spotify_playlist_url && openUrl(room.spotify_playlist_url)}
                 />
@@ -342,7 +368,7 @@ function JoinScreen({
           <TextInput
             value={newRoomName}
             onChangeText={setNewRoomName}
-            placeholder="예: 월암중 축제"
+            placeholder="예: 금요일 파티"
             placeholderTextColor="#6F6F6F"
             style={styles.input}
           />
@@ -505,7 +531,7 @@ function RecentRequests({ requests }) {
   );
 }
 
-function RoomTab({ room, stats, requests, onHostLogin, onRefresh, onOpenPlaylist }) {
+function RoomTab({ room, stats, requests, onHostLogin, onHostDisconnect, onRefresh, onOpenPlaylist }) {
   const qrUrl = `${API_URL}/api/rooms/${room.code}/qr`;
   return (
     <ScrollView contentContainerStyle={styles.tabScroll}>
@@ -525,11 +551,16 @@ function RoomTab({ room, stats, requests, onHostLogin, onRefresh, onOpenPlaylist
           </Text>
           <View style={styles.inlineButtons}>
             <Pressable style={styles.greenButtonSmall} onPress={onHostLogin}>
-              <Text style={styles.greenButtonText}>연결</Text>
+              <Text style={styles.greenButtonText}>{room.spotify_connected ? "변경" : "연결"}</Text>
             </Pressable>
             <Pressable style={styles.secondaryDarkButtonSmall} onPress={onOpenPlaylist}>
               <Text style={styles.secondaryDarkText}>열기</Text>
             </Pressable>
+            {room.spotify_connected ? (
+              <Pressable style={styles.dangerButtonSmall} onPress={onHostDisconnect}>
+                <Text style={styles.dangerButtonText}>연결 끊기</Text>
+              </Pressable>
+            ) : null}
             <Pressable style={styles.secondaryDarkButtonSmall} onPress={onRefresh}>
               <Text style={styles.secondaryDarkText}>갱신</Text>
             </Pressable>
@@ -1043,6 +1074,19 @@ const styles = StyleSheet.create({
   },
   secondaryDarkText: {
     color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900"
+  },
+  dangerButtonSmall: {
+    backgroundColor: "#3A1712",
+    borderRadius: 999,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16
+  },
+  dangerButtonText: {
+    color: "#FFB4A8",
     fontSize: 14,
     fontWeight: "900"
   },

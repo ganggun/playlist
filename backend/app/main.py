@@ -1,3 +1,4 @@
+import asyncio
 from collections import Counter
 from html import escape
 from io import BytesIO
@@ -39,6 +40,7 @@ app = FastAPI(title=settings.app_name)
 
 SPOTIFY_CHOICE_TTL_SECONDS = 15 * 60
 _pending_spotify_choices: dict[str, dict[str, Any]] = {}
+_room_spotify_locks: dict[str, asyncio.Lock] = {}
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,6 +75,24 @@ def _get_room(db: Session, code: str) -> RoomORM:
     if room is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
     return room
+
+
+def _room_spotify_lock(room_id: str) -> asyncio.Lock:
+    lock = _room_spotify_locks.get(room_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _room_spotify_locks[room_id] = lock
+    return lock
+
+
+def _clear_room_spotify(room: RoomORM) -> None:
+    room.host_spotify_user_id = None
+    room.host_spotify_display_name = None
+    room.host_spotify_refresh_token = None
+    room.spotify_playlist_id = None
+    room.spotify_playlist_name = None
+    room.spotify_playlist_url = None
+    room.spotify_playlist_image_url = None
 
 
 def _json_list(value: str) -> list[str]:
@@ -366,6 +386,22 @@ def get_room(code: str, db: Session = Depends(get_db)) -> RoomDetail:
     return _room_to_schema(db, _get_room(db, code))
 
 
+@app.delete("/api/rooms/{code}/spotify", response_model=RoomDetail)
+async def disconnect_room_spotify(code: str, db: Session = Depends(get_db)) -> RoomDetail:
+    room = _get_room(db, code)
+    async with _room_spotify_lock(room.id):
+        db.refresh(room)
+        _clear_room_spotify(room)
+        db.commit()
+        db.refresh(room)
+
+    for choice_id, choice in list(_pending_spotify_choices.items()):
+        if choice.get("mode") == "host" and choice.get("room_code") == room.code:
+            _pending_spotify_choices.pop(choice_id, None)
+
+    return _room_to_schema(db, room)
+
+
 @app.get("/api/rooms/{code}/qr")
 def room_qr(code: str, db: Session = Depends(get_db)) -> Response:
     room = _get_room(db, code)
@@ -410,21 +446,26 @@ async def create_room_song_request(
     db.commit()
     db.refresh(row)
 
-    spotify_result: dict[str, Any]
-    if room.host_spotify_refresh_token and room.spotify_playlist_id:
-        try:
-            spotify_result = await spotify.add_to_playlist(
-                payload.track,
-                refresh_token=room.host_spotify_refresh_token,
-                playlist_id=room.spotify_playlist_id,
-            )
-            row.status = RequestStatus.added.value if spotify_result.get("added") else RequestStatus.queued.value
-        except Exception as exc:
-            spotify_result = {"mode": "spotify", "added": False, "reason": str(exc)}
-            row.status = RequestStatus.failed.value
-    else:
-        spotify_result = {"mode": "room", "added": False, "reason": "Host Spotify playlist is not connected"}
-        row.status = RequestStatus.queued.value
+    spotify_result: dict[str, Any] = {
+        "mode": "room",
+        "added": False,
+        "reason": "Host Spotify playlist is not connected",
+    }
+    row.status = RequestStatus.queued.value
+
+    async with _room_spotify_lock(room.id):
+        db.refresh(room)
+        if room.host_spotify_refresh_token and room.spotify_playlist_id:
+            try:
+                spotify_result = await spotify.add_to_playlist(
+                    payload.track,
+                    refresh_token=room.host_spotify_refresh_token,
+                    playlist_id=room.spotify_playlist_id,
+                )
+                row.status = RequestStatus.added.value if spotify_result.get("added") else RequestStatus.queued.value
+            except Exception as exc:
+                spotify_result = {"mode": "spotify", "added": False, "reason": str(exc)}
+                row.status = RequestStatus.failed.value
 
     row.spotify_result_json = json.dumps(spotify_result, ensure_ascii=False)
     db.commit()
@@ -568,15 +609,17 @@ async def select_host_playlist(
     if not data["playlist_id"]:
         return _spotify_retry_html(room, "host", "Spotify playlist id가 비어 있습니다. 다시 연결하세요.")
 
-    room.host_spotify_refresh_token = refresh_token
-    room.host_spotify_user_id = user.get("id")
-    room.host_spotify_display_name = _spotify_user_name(user, room.host_name)
-    room.spotify_playlist_id = data["playlist_id"]
-    room.spotify_playlist_name = data["name"]
-    room.spotify_playlist_url = data["external_url"]
-    room.spotify_playlist_image_url = data["image_url"]
+    async with _room_spotify_lock(room.id):
+        db.refresh(room)
+        room.host_spotify_refresh_token = refresh_token
+        room.host_spotify_user_id = user.get("id")
+        room.host_spotify_display_name = _spotify_user_name(user, room.host_name)
+        room.spotify_playlist_id = data["playlist_id"]
+        room.spotify_playlist_name = data["name"]
+        room.spotify_playlist_url = data["external_url"]
+        room.spotify_playlist_image_url = data["image_url"]
+        db.commit()
 
-    db.commit()
     _pending_spotify_choices.pop(choice_id, None)
     return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&spotify=connected")
 
