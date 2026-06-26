@@ -249,6 +249,11 @@ class SpotifyClient:
         if isinstance(error, dict):
             status = error.get("status", response.status_code)
             message = error.get("message", fallback)
+            if response.status_code == 403:
+                return (
+                    f"Spotify API error ({status}): {message}. "
+                    "방장 Spotify 계정이 이 플레이리스트를 수정할 권한이 없습니다. 방 탭에서 Spotify를 다시 연결하세요."
+                )
             return f"Spotify API error ({status}): {message}"
         if error:
             return f"Spotify API error ({response.status_code}): {error}"

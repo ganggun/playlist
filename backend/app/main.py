@@ -444,31 +444,28 @@ async def spotify_callback(
 
             room.host_spotify_refresh_token = refresh_token
 
-            if not room.spotify_playlist_id:
-                try:
-                    playlist = await spotify.create_playlist(
-                        access_token=access_token,
-                        name=f"{room.name} 신청곡",
-                        description=f"{room.name} 방에서 함께 채우는 신청곡 플레이리스트",
-                    )
-                except Exception as exc:
-                    return _spotify_retry_html(
-                        room,
-                        mode,
-                        _external_error_detail(exc),
-                        "Spotify 플레이리스트 생성 중 오류가 발생했습니다.",
-                    )
+            try:
+                playlist = await spotify.create_playlist(
+                    access_token=access_token,
+                    name=f"{room.name} 신청곡",
+                    description=f"{room.name} 방에서 함께 채우는 신청곡 플레이리스트",
+                )
+            except Exception as exc:
+                return _spotify_retry_html(
+                    room,
+                    mode,
+                    _external_error_detail(exc),
+                    "Spotify 플레이리스트 생성 중 오류가 발생했습니다.",
+                )
 
-                images = playlist.get("images") or []
-                owner = playlist.get("owner") or {}
-                room.host_spotify_user_id = owner.get("id")
-                room.host_spotify_display_name = owner.get("display_name") or owner.get("id") or room.host_name
-                room.spotify_playlist_id = playlist.get("id")
-                room.spotify_playlist_name = playlist.get("name")
-                room.spotify_playlist_url = (playlist.get("external_urls") or {}).get("spotify")
-                room.spotify_playlist_image_url = images[0].get("url") if images else None
-            elif not room.host_spotify_display_name:
-                room.host_spotify_display_name = room.host_name
+            images = playlist.get("images") or []
+            owner = playlist.get("owner") or {}
+            room.host_spotify_user_id = owner.get("id")
+            room.host_spotify_display_name = owner.get("display_name") or owner.get("id") or room.host_name
+            room.spotify_playlist_id = playlist.get("id")
+            room.spotify_playlist_name = playlist.get("name")
+            room.spotify_playlist_url = (playlist.get("external_urls") or {}).get("spotify")
+            room.spotify_playlist_image_url = images[0].get("url") if images else None
 
             db.commit()
             return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&spotify=connected")
