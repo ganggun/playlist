@@ -3,7 +3,10 @@ from html import escape
 from io import BytesIO
 import json
 import random
+import secrets
+import time
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +36,9 @@ from .store import DEMO_TRACKS, store
 
 
 app = FastAPI(title=settings.app_name)
+
+SPOTIFY_CHOICE_TTL_SECONDS = 15 * 60
+_pending_spotify_choices: dict[str, dict[str, Any]] = {}
 
 app.add_middleware(
     CORSMiddleware,
@@ -163,6 +169,120 @@ def _playlist_payload(item: dict[str, Any]) -> dict[str, Any]:
         "external_url": (item.get("external_urls") or {}).get("spotify"),
         "track_count": tracks.get("total") or 0,
     }
+
+
+def _spotify_user_name(user: dict[str, Any], fallback: str) -> str:
+    display_name = user.get("display_name")
+    user_id = user.get("id")
+    return _display_spotify_name(display_name, user_id, fallback)
+
+
+def _playlist_owner(item: dict[str, Any]) -> dict[str, Any]:
+    owner = item.get("owner")
+    return owner if isinstance(owner, dict) else {}
+
+
+def _owned_playlists(playlists: list[dict[str, Any]], user_id: str | None) -> list[dict[str, Any]]:
+    if not user_id:
+        return playlists
+    return [item for item in playlists if _playlist_owner(item).get("id") == user_id]
+
+
+def _store_spotify_choice(data: dict[str, Any]) -> str:
+    now = time.time()
+    expired = [
+        choice_id
+        for choice_id, choice in _pending_spotify_choices.items()
+        if choice.get("expires_at", 0) < now
+    ]
+    for choice_id in expired:
+        _pending_spotify_choices.pop(choice_id, None)
+
+    choice_id = secrets.token_urlsafe(24)
+    _pending_spotify_choices[choice_id] = {
+        **data,
+        "expires_at": now + SPOTIFY_CHOICE_TTL_SECONDS,
+    }
+    return choice_id
+
+
+def _get_spotify_choice(choice_id: str, mode: str) -> dict[str, Any]:
+    choice = _pending_spotify_choices.get(choice_id)
+    if not choice or choice.get("expires_at", 0) < time.time() or choice.get("mode") != mode:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Spotify selection expired. Try connecting again.",
+        )
+    return choice
+
+
+def _playlist_card_html(item: dict[str, Any], action_url: str, action_label: str) -> str:
+    data = _playlist_payload(item)
+    image = data["image_url"]
+    image_html = (
+        f'<img src="{escape(image)}" alt="" style="width:64px;height:64px;border-radius:6px;object-fit:cover;background:#282828;">'
+        if image
+        else '<div style="width:64px;height:64px;border-radius:6px;background:#282828;display:grid;place-items:center;color:#1ed760;font-weight:900;">♪</div>'
+    )
+    description = data["description"] or f'{data["track_count"]}곡'
+    return f"""
+      <div style="display:flex;align-items:center;gap:14px;border-bottom:1px solid #2a2a2a;padding:14px 0;">
+        {image_html}
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:900;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{escape(data["name"])}</div>
+          <div style="color:#b3b3b3;font-size:13px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{escape(description)}</div>
+        </div>
+        <a href="{escape(action_url)}" style="display:inline-block;background:#1ed760;color:#000;text-decoration:none;font-weight:900;border-radius:999px;padding:10px 14px;">{escape(action_label)}</a>
+      </div>
+    """
+
+
+def _host_playlist_picker_html(room: RoomORM, choice_id: str, user: dict[str, Any], playlists: list[dict[str, Any]]) -> HTMLResponse:
+    rows = "\n".join(
+        _playlist_card_html(
+            item,
+            f"/api/spotify/choices/{choice_id}/host?{urlencode({'playlist_id': item.get('id', '')})}",
+            "사용",
+        )
+        for item in playlists
+        if item.get("id")
+    )
+    if not rows:
+        rows = '<p style="color:#b3b3b3;">선택할 수 있는 내 소유 플레이리스트가 없습니다. 새 플레이리스트를 만들어 연결하세요.</p>'
+
+    body = f"""
+      <p style="color:#b3b3b3;">{escape(_spotify_user_name(user, room.host_name))} 계정으로 연결했습니다.</p>
+      <p>신청곡이 추가될 방장 플레이리스트를 선택하세요. 기존 플레이리스트는 내가 소유한 항목만 보여줍니다.</p>
+      <form action="/api/spotify/choices/{choice_id}/host" method="get" style="display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 26px;">
+        <input type="hidden" name="create" value="1">
+        <input name="name" value="{escape(room.name)} 신청곡" maxlength="120" style="flex:1;min-width:220px;background:#242424;color:#fff;border:0;border-radius:999px;padding:12px 16px;font:inherit;">
+        <button type="submit" style="background:#1ed760;color:#000;border:0;font-weight:900;border-radius:999px;padding:12px 18px;cursor:pointer;">새로 만들기</button>
+      </form>
+      <h2 style="margin-top:28px;">기존 플레이리스트 사용</h2>
+      {rows}
+    """
+    return _success_html("방장 플레이리스트 선택", body)
+
+
+def _share_playlist_picker_html(room: RoomORM, choice_id: str, user: dict[str, Any], playlists: list[dict[str, Any]]) -> HTMLResponse:
+    rows = "\n".join(
+        _playlist_card_html(
+            item,
+            f"/api/spotify/choices/{choice_id}/share?{urlencode({'playlist_id': item.get('id', '')})}",
+            "공유",
+        )
+        for item in playlists
+        if item.get("id")
+    )
+    if not rows:
+        rows = '<p style="color:#b3b3b3;">공유할 수 있는 플레이리스트가 없습니다.</p>'
+
+    body = f"""
+      <p style="color:#b3b3b3;">{escape(_spotify_user_name(user, "Spotify User"))} 계정으로 연결했습니다.</p>
+      <p>{escape(room.name)} 방에 공유할 플레이리스트 하나를 선택하세요.</p>
+      {rows}
+    """
+    return _success_html("공유할 플레이리스트 선택", body)
 
 
 def _success_html(title: str, body: str) -> HTMLResponse:
@@ -383,7 +503,7 @@ def room_spotify_login(code: str, db: Session = Depends(get_db)) -> RedirectResp
 @app.get("/api/rooms/{code}/spotify/share/login")
 def share_spotify_login(code: str, db: Session = Depends(get_db)) -> RedirectResponse:
     room = _get_room(db, code)
-    scope = "playlist-read-private playlist-read-collaborative"
+    scope = "playlist-read-private playlist-read-collaborative user-read-private"
     try:
         url = spotify.build_scoped_authorize_url(scope=scope, state=f"share:{room.code}")
     except ValueError as exc:
@@ -404,6 +524,103 @@ def spotify_login() -> RedirectResponse:
             detail="Spotify OAuth is not configured",
         ) from exc
     return RedirectResponse(url)
+
+
+@app.get("/api/spotify/choices/{choice_id}/host")
+async def select_host_playlist(
+    choice_id: str,
+    playlist_id: str | None = Query(default=None),
+    create: bool = Query(default=False),
+    name: str | None = Query(default=None, max_length=120),
+    db: Session = Depends(get_db),
+) -> Response:
+    choice = _get_spotify_choice(choice_id, "host")
+    room = _get_room(db, choice["room_code"])
+    user = choice.get("user") or {}
+    access_token = choice.get("access_token", "")
+    refresh_token = choice.get("refresh_token") or room.host_spotify_refresh_token
+
+    if not refresh_token:
+        return _spotify_retry_html(room, "host", "Spotify refresh token이 없습니다. 다시 연결하세요.")
+
+    if create:
+        playlist_name = (name or "").strip() or f"{room.name} 신청곡"
+        try:
+            playlist = await spotify.create_playlist(
+                access_token=access_token,
+                name=playlist_name,
+                description=f"{room.name} 방에서 함께 채우는 신청곡 플레이리스트",
+            )
+        except Exception as exc:
+            return _spotify_retry_html(
+                room,
+                "host",
+                _external_error_detail(exc),
+                "Spotify 플레이리스트 생성 중 오류가 발생했습니다.",
+            )
+    else:
+        playlists = choice.get("playlists") or []
+        playlist = next((item for item in playlists if item.get("id") == playlist_id), None)
+        if playlist is None:
+            return _spotify_retry_html(room, "host", "선택한 플레이리스트를 찾지 못했습니다. 다시 연결하세요.")
+
+    data = _playlist_payload(playlist)
+    if not data["playlist_id"]:
+        return _spotify_retry_html(room, "host", "Spotify playlist id가 비어 있습니다. 다시 연결하세요.")
+
+    room.host_spotify_refresh_token = refresh_token
+    room.host_spotify_user_id = user.get("id")
+    room.host_spotify_display_name = _spotify_user_name(user, room.host_name)
+    room.spotify_playlist_id = data["playlist_id"]
+    room.spotify_playlist_name = data["name"]
+    room.spotify_playlist_url = data["external_url"]
+    room.spotify_playlist_image_url = data["image_url"]
+
+    db.commit()
+    _pending_spotify_choices.pop(choice_id, None)
+    return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&spotify=connected")
+
+
+@app.get("/api/spotify/choices/{choice_id}/share")
+def select_shared_playlist(
+    choice_id: str,
+    playlist_id: str = Query(default=""),
+    db: Session = Depends(get_db),
+) -> Response:
+    choice = _get_spotify_choice(choice_id, "share")
+    room = _get_room(db, choice["room_code"])
+    playlists = choice.get("playlists") or []
+    playlist = next((item for item in playlists if item.get("id") == playlist_id), None)
+    if playlist is None:
+        return _spotify_retry_html(room, "share", "선택한 플레이리스트를 찾지 못했습니다. 다시 연결하세요.")
+
+    data = _playlist_payload(playlist)
+    if not data["playlist_id"]:
+        return _spotify_retry_html(room, "share", "Spotify playlist id가 비어 있습니다. 다시 연결하세요.")
+
+    owner = _playlist_owner(playlist)
+    existing = (
+        db.query(SharedPlaylistORM)
+        .filter(
+            SharedPlaylistORM.room_id == room.id,
+            SharedPlaylistORM.playlist_id == data["playlist_id"],
+        )
+        .first()
+    )
+    target = existing or SharedPlaylistORM(room_id=room.id, playlist_id=data["playlist_id"])
+    target.owner_spotify_user_id = owner.get("id") or (choice.get("user") or {}).get("id")
+    target.owner_name = owner.get("display_name") or _spotify_user_name(choice.get("user") or {}, "Spotify User")
+    target.name = data["name"]
+    target.description = data["description"]
+    target.image_url = data["image_url"]
+    target.external_url = data["external_url"]
+    target.track_count = data["track_count"]
+    if existing is None:
+        db.add(target)
+    db.commit()
+
+    _pending_spotify_choices.pop(choice_id, None)
+    return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&shared=1")
 
 
 @app.get("/api/auth/spotify/callback", response_class=HTMLResponse)
@@ -452,37 +669,34 @@ async def spotify_callback(
                     detail="Spotify did not return a refresh token. Try reconnecting with consent.",
                 )
 
-            room.host_spotify_refresh_token = refresh_token
-
             try:
-                playlist = await spotify.create_playlist(
-                    access_token=access_token,
-                    name=f"{room.name} 신청곡",
-                    description=f"{room.name} 방에서 함께 채우는 신청곡 플레이리스트",
-                )
+                user = await spotify.get_current_user(access_token)
+                playlists = await spotify.get_user_playlists(access_token, limit=50)
             except Exception as exc:
                 return _spotify_retry_html(
                     room,
                     mode,
                     _external_error_detail(exc),
-                    "Spotify 플레이리스트 생성 중 오류가 발생했습니다.",
+                    "Spotify 계정 또는 플레이리스트 조회 중 오류가 발생했습니다.",
                 )
 
-            images = playlist.get("images") or []
-            owner = playlist.get("owner") or {}
-            room.host_spotify_user_id = owner.get("id")
-            room.host_spotify_display_name = owner.get("display_name") or room.host_name
-            room.spotify_playlist_id = playlist.get("id")
-            room.spotify_playlist_name = playlist.get("name")
-            room.spotify_playlist_url = (playlist.get("external_urls") or {}).get("spotify")
-            room.spotify_playlist_image_url = images[0].get("url") if images else None
-
-            db.commit()
-            return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&spotify=connected")
+            user_id = user.get("id")
+            choice_id = _store_spotify_choice(
+                {
+                    "mode": "host",
+                    "room_code": room.code,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "user": user,
+                    "playlists": _owned_playlists(playlists, user_id),
+                }
+            )
+            return _host_playlist_picker_html(room, choice_id, user, _owned_playlists(playlists, user_id))
 
         if mode == "share":
             try:
-                playlists = await spotify.get_user_playlists(access_token, limit=8)
+                user = await spotify.get_current_user(access_token)
+                playlists = await spotify.get_user_playlists(access_token, limit=50)
             except Exception as exc:
                 return _spotify_retry_html(
                     room,
@@ -491,33 +705,16 @@ async def spotify_callback(
                     "Spotify 플레이리스트 조회 중 오류가 발생했습니다.",
                 )
 
-            saved = 0
-            for item in playlists:
-                data = _playlist_payload(item)
-                if not data["playlist_id"]:
-                    continue
-                owner = item.get("owner") or {}
-                existing = (
-                    db.query(SharedPlaylistORM)
-                    .filter(
-                        SharedPlaylistORM.room_id == room.id,
-                        SharedPlaylistORM.playlist_id == data["playlist_id"],
-                    )
-                    .first()
-                )
-                target = existing or SharedPlaylistORM(room_id=room.id, playlist_id=data["playlist_id"])
-                target.owner_spotify_user_id = owner.get("id")
-                target.owner_name = owner.get("display_name") or "Spotify User"
-                target.name = data["name"]
-                target.description = data["description"]
-                target.image_url = data["image_url"]
-                target.external_url = data["external_url"]
-                target.track_count = data["track_count"]
-                if existing is None:
-                    db.add(target)
-                saved += 1
-            db.commit()
-            return RedirectResponse(f"{settings.resolved_public_app_url}/?room={room.code}&shared={saved}")
+            choice_id = _store_spotify_choice(
+                {
+                    "mode": "share",
+                    "room_code": room.code,
+                    "access_token": access_token,
+                    "user": user,
+                    "playlists": playlists,
+                }
+            )
+            return _share_playlist_picker_html(room, choice_id, user, playlists)
 
     refresh_token = escape(token_data.get("refresh_token", ""))
     access_token = escape(token_data.get("access_token", ""))
