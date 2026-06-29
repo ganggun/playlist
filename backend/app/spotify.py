@@ -192,12 +192,10 @@ class SpotifyClient:
             "Authorization": f"Bearer {token}",
             "Accept-Language": SPOTIFY_LANGUAGE_HEADER,
         }
-        params = {"fields": "id,name,description,images,external_urls,tracks(total),owner"}
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(
                 f"https://api.spotify.com/v1/playlists/{playlist_id}",
                 headers=headers,
-                params=params,
             )
         try:
             response.raise_for_status()
@@ -226,16 +224,16 @@ class SpotifyClient:
             "Accept-Language": SPOTIFY_LANGUAGE_HEADER,
         }
         params = {
-            "limit": min(max_items, 100),
+            "limit": min(max_items, 50),
             "offset": 0,
-            "fields": "items(track(id,name,uri,duration_ms,album(name,images),artists(name))),next",
+            "fields": "items(item(id,name,uri,type,duration_ms,album(name,images),artists(name))),next",
             "market": "KR",
         }
         tracks: list[Track] = []
         async with httpx.AsyncClient(timeout=10) as client:
             while len(tracks) < max_items:
                 response = await client.get(
-                    f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks",
+                    f"https://api.spotify.com/v1/playlists/{playlist_id}/items",
                     headers=headers,
                     params=params,
                 )
@@ -245,13 +243,13 @@ class SpotifyClient:
                     detail = self._api_error_message(
                         response,
                         "Spotify playlist tracks request failed",
-                        forbidden_hint="이 플레이리스트의 곡 목록을 읽을 권한이 없습니다. 비공개 플레이리스트라면 공유 탭에서 해당 Spotify 계정으로 다시 공유하세요.",
+                        forbidden_hint="Spotify Dev Mode에서는 로그인한 사용자가 직접 소유하거나 collaborator인 플레이리스트의 곡 목록만 읽을 수 있습니다. 공개 여부가 아니라 소유/협업 권한을 확인하세요.",
                     )
                     raise SpotifyAuthError(detail, status_code=response.status_code) from exc
 
                 data = response.json()
                 for item in data.get("items", []):
-                    track = self._parse_playlist_track(item.get("track") or {})
+                    track = self._parse_playlist_track(item.get("item") or item.get("track") or {})
                     if track:
                         tracks.append(track)
                     if len(tracks) >= max_items:

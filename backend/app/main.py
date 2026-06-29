@@ -192,14 +192,15 @@ def _shared_to_schema(row: SharedPlaylistORM) -> SharedPlaylist:
 
 def _playlist_payload(item: dict[str, Any]) -> dict[str, Any]:
     images = item.get("images") or []
-    tracks = item.get("tracks") or {}
+    playlist_items = item.get("items") if isinstance(item.get("items"), dict) else {}
+    tracks = item.get("tracks") if isinstance(item.get("tracks"), dict) else {}
     return {
         "playlist_id": item.get("id", ""),
         "name": item.get("name", "Untitled playlist"),
         "description": item.get("description") or "",
         "image_url": images[0].get("url") if images else None,
         "external_url": (item.get("external_urls") or {}).get("spotify"),
-        "track_count": tracks.get("total") or 0,
+        "track_count": playlist_items.get("total") or tracks.get("total") or 0,
     }
 
 
@@ -258,6 +259,16 @@ def _owned_playlists(playlists: list[dict[str, Any]], user_id: str | None) -> li
     if not user_id:
         return playlists
     return [item for item in playlists if _playlist_owner(item).get("id") == user_id]
+
+
+def _shareable_playlists(playlists: list[dict[str, Any]], user_id: str | None) -> list[dict[str, Any]]:
+    if not user_id:
+        return playlists
+    return [
+        item
+        for item in playlists
+        if _playlist_owner(item).get("id") == user_id or item.get("collaborative") is True
+    ]
 
 
 def _store_spotify_choice(data: dict[str, Any]) -> str:
@@ -347,11 +358,11 @@ def _share_playlist_picker_html(room: RoomORM, choice_id: str, user: dict[str, A
         if item.get("id")
     )
     if not rows:
-        rows = '<p style="color:#b3b3b3;">공유할 수 있는 플레이리스트가 없습니다.</p>'
+        rows = '<p style="color:#b3b3b3;">공유할 수 있는 플레이리스트가 없습니다. Spotify Dev Mode에서는 내가 직접 소유하거나 collaborator인 플레이리스트만 공유할 수 있습니다.</p>'
 
     body = f"""
       <p style="color:#b3b3b3;">{escape(_spotify_user_name(user, "Spotify User"))} 계정으로 연결했습니다.</p>
-      <p>{escape(room.name)} 방에 공유할 플레이리스트 하나를 선택하세요.</p>
+      <p>{escape(room.name)} 방에 공유할 플레이리스트 하나를 선택하세요. 직접 소유하거나 collaborator인 항목만 표시됩니다.</p>
       {rows}
     """
     return _success_html("공유할 플레이리스트 선택", body)
@@ -413,8 +424,8 @@ def _shared_playlist_tracks_error_detail(exc: Exception) -> str:
     detail = _external_error_detail(exc)
     if getattr(exc, "status_code", None) == status.HTTP_403_FORBIDDEN or "Spotify API error (403)" in detail:
         return (
-            f"{detail} 이미 저장된 곡 스냅샷이 없는 비공개 플레이리스트는 서버가 단독으로 다시 읽을 수 없습니다. "
-            "방장 연결이 아니라 공유 탭의 '내 것 공유'에서 해당 플레이리스트를 다시 선택하세요."
+            f"{detail} 이미 저장된 곡 스냅샷이 없는 플레이리스트는 서버가 단독으로 다시 읽을 수 없습니다. "
+            "방장 연결이 아니라 공유 탭의 '내 것 공유'에서 직접 소유하거나 collaborator인 플레이리스트를 다시 선택하세요."
         )
     return detail
 
@@ -765,6 +776,15 @@ async def select_shared_playlist(
         return _spotify_retry_html(room, "share", "Spotify playlist id가 비어 있습니다. 다시 연결하세요.")
 
     owner = _playlist_owner(playlist)
+    user = choice.get("user") or {}
+    user_id = user.get("id")
+    if user_id and owner.get("id") != user_id and playlist.get("collaborative") is not True:
+        return _spotify_retry_html(
+            room,
+            "share",
+            "Spotify Dev Mode에서는 로그인한 사용자가 직접 소유하거나 collaborator인 플레이리스트의 곡 목록만 읽을 수 있습니다. 본인이 소유한 플레이리스트 또는 collaborator로 초대된 플레이리스트를 선택하세요.",
+            "이 플레이리스트는 공유할 수 없습니다.",
+        )
     existing = (
         db.query(SharedPlaylistORM)
         .filter(
@@ -774,8 +794,8 @@ async def select_shared_playlist(
         .first()
     )
     target = existing or SharedPlaylistORM(room_id=room.id, playlist_id=data["playlist_id"])
-    target.owner_spotify_user_id = owner.get("id") or (choice.get("user") or {}).get("id")
-    target.owner_name = owner.get("display_name") or _spotify_user_name(choice.get("user") or {}, "Spotify User")
+    target.owner_spotify_user_id = owner.get("id") or user_id
+    target.owner_name = owner.get("display_name") or _spotify_user_name(user, "Spotify User")
     target.name = data["name"]
     target.description = data["description"]
     target.image_url = data["image_url"]
@@ -888,16 +908,17 @@ async def spotify_callback(
                     "Spotify 플레이리스트 조회 중 오류가 발생했습니다.",
                 )
 
+            shareable_playlists = _shareable_playlists(playlists, user.get("id"))
             choice_id = _store_spotify_choice(
                 {
                     "mode": "share",
                     "room_code": room.code,
                     "access_token": access_token,
                     "user": user,
-                    "playlists": playlists,
+                    "playlists": shareable_playlists,
                 }
             )
-            return _share_playlist_picker_html(room, choice_id, user, playlists)
+            return _share_playlist_picker_html(room, choice_id, user, shareable_playlists)
 
     refresh_token = escape(token_data.get("refresh_token", ""))
     access_token = escape(token_data.get("access_token", ""))
