@@ -601,8 +601,11 @@ async def list_shared_playlist_tracks(
 
     try:
         tracks = await spotify.get_playlist_tracks(playlist.playlist_id, max_items=50)
-    except Exception:
-        return []
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_external_error_detail(exc),
+        ) from exc
 
     _replace_shared_playlist_tracks(db, playlist, tracks)
     playlist.track_count = max(playlist.track_count, len(tracks))
@@ -776,8 +779,13 @@ async def select_shared_playlist(
             access_token=choice.get("access_token", ""),
             max_items=50,
         )
-    except Exception:
-        tracks = []
+    except Exception as exc:
+        return _spotify_retry_html(
+            room,
+            "share",
+            _external_error_detail(exc),
+            "공유할 플레이리스트의 곡 목록을 불러오지 못했습니다.",
+        )
     _replace_shared_playlist_tracks(db, target, tracks)
     if tracks:
         target.track_count = max(target.track_count, len(tracks))

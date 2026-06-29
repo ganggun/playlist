@@ -61,7 +61,15 @@ export default function App() {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(text || `Request failed: ${response.status}`);
+      try {
+        const data = JSON.parse(text);
+        throw new Error(data.detail || text || `Request failed: ${response.status}`);
+      } catch (parseError) {
+        if (parseError instanceof Error && parseError.message && parseError.message !== text) {
+          throw parseError;
+        }
+        throw new Error(text || `Request failed: ${response.status}`);
+      }
     }
 
     return response.json();
@@ -248,7 +256,7 @@ export default function App() {
         [playlist.id]: nextTracks
       }));
     } catch (err) {
-      setError("공유 플레이리스트 곡 목록을 불러오지 못했습니다.");
+      setError(`공유 플레이리스트 곡 목록을 불러오지 못했습니다. ${err.message || ""}`.trim());
     } finally {
       setTrackLoadingId("");
     }
@@ -704,7 +712,11 @@ function SharedPlaylistCard({ playlist, isOpen, tracks, loading, onToggle }) {
               <SharedTrackRow key={`${track.id}-${index}`} track={track} index={index + 1} />
             ))
           ) : (
-            <Text style={styles.emptyText}>표시할 곡이 없습니다.</Text>
+            <Text style={styles.emptyText}>
+              {playlist.track_count > 0
+                ? "곡 목록을 불러오지 못했습니다. 비공개 플레이리스트라면 다시 공유해 주세요."
+                : "표시할 곡이 없습니다."}
+            </Text>
           )}
         </View>
       ) : null}
