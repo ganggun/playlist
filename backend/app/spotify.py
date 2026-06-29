@@ -133,7 +133,11 @@ class SpotifyClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = self._api_error_message(response, "Spotify playlist add failed")
+            detail = self._api_error_message(
+                response,
+                "Spotify playlist add failed",
+                forbidden_hint="방장 Spotify 계정이 이 플레이리스트를 수정할 권한이 없습니다. 방 탭에서 방장 Spotify를 다시 연결하거나 방장이 수정 가능한 플레이리스트를 선택하세요.",
+            )
             raise SpotifyAuthError(detail, status_code=response.status_code) from exc
 
         return {"mode": "spotify", "added": True, "snapshot_id": response.json().get("snapshot_id")}
@@ -198,7 +202,11 @@ class SpotifyClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = self._api_error_message(response, "Spotify playlist request failed")
+            detail = self._api_error_message(
+                response,
+                "Spotify playlist request failed",
+                forbidden_hint="이 플레이리스트 정보를 읽을 권한이 없습니다. 비공개 플레이리스트라면 해당 Spotify 계정으로 다시 연결하세요.",
+            )
             raise SpotifyAuthError(detail, status_code=response.status_code) from exc
         return response.json()
 
@@ -234,7 +242,11 @@ class SpotifyClient:
                 try:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as exc:
-                    detail = self._api_error_message(response, "Spotify playlist tracks request failed")
+                    detail = self._api_error_message(
+                        response,
+                        "Spotify playlist tracks request failed",
+                        forbidden_hint="이 플레이리스트의 곡 목록을 읽을 권한이 없습니다. 비공개 플레이리스트라면 공유 탭에서 해당 Spotify 계정으로 다시 공유하세요.",
+                    )
                     raise SpotifyAuthError(detail, status_code=response.status_code) from exc
 
                 data = response.json()
@@ -322,7 +334,11 @@ class SpotifyClient:
         return f"Spotify token request failed with status {response.status_code}"
 
     @staticmethod
-    def _api_error_message(response: httpx.Response, fallback: str) -> str:
+    def _api_error_message(
+        response: httpx.Response,
+        fallback: str,
+        forbidden_hint: str | None = None,
+    ) -> str:
         try:
             data = response.json()
         except ValueError:
@@ -332,11 +348,8 @@ class SpotifyClient:
         if isinstance(error, dict):
             status = error.get("status", response.status_code)
             message = error.get("message", fallback)
-            if response.status_code == 403:
-                return (
-                    f"Spotify API error ({status}): {message}. "
-                    "방장 Spotify 계정이 이 플레이리스트를 수정할 권한이 없습니다. 방 탭에서 Spotify를 다시 연결하세요."
-                )
+            if response.status_code == 403 and forbidden_hint:
+                return f"Spotify API error ({status}): {message}. {forbidden_hint}"
             return f"Spotify API error ({status}): {message}"
         if error:
             return f"Spotify API error ({response.status_code}): {error}"

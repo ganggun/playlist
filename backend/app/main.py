@@ -409,6 +409,16 @@ def _external_error_detail(exc: Exception) -> str:
     return str(exc) or type(exc).__name__
 
 
+def _shared_playlist_tracks_error_detail(exc: Exception) -> str:
+    detail = _external_error_detail(exc)
+    if getattr(exc, "status_code", None) == status.HTTP_403_FORBIDDEN or "Spotify API error (403)" in detail:
+        return (
+            f"{detail} 이미 저장된 곡 스냅샷이 없는 비공개 플레이리스트는 서버가 단독으로 다시 읽을 수 없습니다. "
+            "방장 연결이 아니라 공유 탭의 '내 것 공유'에서 해당 플레이리스트를 다시 선택하세요."
+        )
+    return detail
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {"name": settings.app_name, "status": "ok"}
@@ -604,7 +614,7 @@ async def list_shared_playlist_tracks(
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=_external_error_detail(exc),
+            detail=_shared_playlist_tracks_error_detail(exc),
         ) from exc
 
     _replace_shared_playlist_tracks(db, playlist, tracks)
@@ -773,6 +783,7 @@ async def select_shared_playlist(
     target.track_count = data["track_count"]
     if existing is None:
         db.add(target)
+        db.flush()
     try:
         tracks = await spotify.get_playlist_tracks(
             data["playlist_id"],

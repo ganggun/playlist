@@ -41,6 +41,7 @@ export default function App() {
   const [sharedPlaylists, setSharedPlaylists] = useState([]);
   const [expandedPlaylistId, setExpandedPlaylistId] = useState("");
   const [playlistTracks, setPlaylistTracks] = useState({});
+  const [playlistTrackErrors, setPlaylistTrackErrors] = useState({});
   const [trackLoadingId, setTrackLoadingId] = useState("");
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -249,6 +250,11 @@ export default function App() {
 
     setTrackLoadingId(playlist.id);
     setError("");
+    setPlaylistTrackErrors((current) => {
+      const next = { ...current };
+      delete next[playlist.id];
+      return next;
+    });
     try {
       const nextTracks = await api(`/api/rooms/${room.code}/shared-playlists/${playlist.id}/tracks`);
       setPlaylistTracks((current) => ({
@@ -256,7 +262,12 @@ export default function App() {
         [playlist.id]: nextTracks
       }));
     } catch (err) {
-      setError(`공유 플레이리스트 곡 목록을 불러오지 못했습니다. ${err.message || ""}`.trim());
+      const message = `공유 플레이리스트 곡 목록을 불러오지 못했습니다. ${err.message || ""}`.trim();
+      setPlaylistTrackErrors((current) => ({
+        ...current,
+        [playlist.id]: message
+      }));
+      setError(message);
     } finally {
       setTrackLoadingId("");
     }
@@ -269,6 +280,7 @@ export default function App() {
     setSharedPlaylists([]);
     setExpandedPlaylistId("");
     setPlaylistTracks({});
+    setPlaylistTrackErrors({});
     setTrackLoadingId("");
     setStats(null);
     setNotice("");
@@ -366,6 +378,7 @@ export default function App() {
                   openShareLogin={openShareLogin}
                   expandedPlaylistId={expandedPlaylistId}
                   playlistTracks={playlistTracks}
+                  playlistTrackErrors={playlistTrackErrors}
                   trackLoadingId={trackLoadingId}
                   onTogglePlaylist={toggleSharedPlaylist}
                 />
@@ -651,6 +664,7 @@ function ShareTab({
   openShareLogin,
   expandedPlaylistId,
   playlistTracks,
+  playlistTrackErrors,
   trackLoadingId,
   onTogglePlaylist
 }) {
@@ -675,6 +689,7 @@ function ShareTab({
             playlist={playlist}
             isOpen={expandedPlaylistId === playlist.id}
             tracks={playlistTracks[playlist.id] || []}
+            trackError={playlistTrackErrors[playlist.id] || ""}
             loading={trackLoadingId === playlist.id}
             onToggle={() => onTogglePlaylist(playlist)}
           />
@@ -684,7 +699,7 @@ function ShareTab({
   );
 }
 
-function SharedPlaylistCard({ playlist, isOpen, tracks, loading, onToggle }) {
+function SharedPlaylistCard({ playlist, isOpen, tracks, trackError, loading, onToggle }) {
   return (
     <View style={[styles.playlistCard, isOpen && styles.playlistCardOpen]}>
       <Pressable style={styles.playlistCardHeader} onPress={onToggle}>
@@ -707,6 +722,8 @@ function SharedPlaylistCard({ playlist, isOpen, tracks, loading, onToggle }) {
             <View style={styles.loadingArea}>
               <ActivityIndicator color="#1ED760" />
             </View>
+          ) : trackError ? (
+            <Text style={styles.inlineError}>{trackError}</Text>
           ) : tracks.length ? (
             tracks.map((track, index) => (
               <SharedTrackRow key={`${track.id}-${index}`} track={track} index={index + 1} />
@@ -1234,6 +1251,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     marginTop: 12,
+    overflow: "hidden"
+  },
+  inlineError: {
+    color: "#FFB4A8",
+    backgroundColor: "#2A1714",
+    borderRadius: 8,
+    padding: 12,
+    marginVertical: 8,
     overflow: "hidden"
   },
   trackList: {
