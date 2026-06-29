@@ -535,6 +535,13 @@ async def refresh_room_spotify(code: str, db: Session = Depends(get_db)) -> Room
         db.refresh(room)
         try:
             await _refresh_room_playlist_metadata(room)
+            if room.spotify_playlist_id:
+                tracks = await spotify.get_playlist_tracks(
+                    room.spotify_playlist_id,
+                    refresh_token=room.host_spotify_refresh_token,
+                    max_items=50,
+                )
+                _seed_room_requests_from_playlist(db, room, tracks)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
