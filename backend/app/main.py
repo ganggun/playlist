@@ -1,5 +1,6 @@
 import asyncio
 from collections import Counter
+from datetime import datetime, timedelta
 from html import escape
 from io import BytesIO
 import json
@@ -242,6 +243,55 @@ def _replace_shared_playlist_tracks(db: Session, playlist: SharedPlaylistORM, tr
                 spotify_uri=track.spotify_uri,
             )
         )
+
+
+def _seed_room_requests_from_playlist(
+    db: Session,
+    room: RoomORM,
+    tracks: list[Track],
+    source_name: str = "기존 플레이리스트",
+) -> int:
+    track_ids = [track.id for track in tracks if track.id]
+    if not track_ids:
+        return 0
+
+    existing_ids = {
+        track_id
+        for (track_id,) in db.query(SongRequestORM.track_id)
+        .filter(SongRequestORM.room_id == room.id, SongRequestORM.track_id.in_(track_ids))
+        .all()
+    }
+    now = datetime.utcnow()
+    imported = 0
+    for index, track in enumerate(tracks):
+        if not track.id or track.id in existing_ids:
+            continue
+        db.add(
+            SongRequestORM(
+                room_id=room.id,
+                track_id=track.id,
+                track_name=track.name,
+                artists_json=json.dumps(track.artists, ensure_ascii=False),
+                album=track.album,
+                image_url=track.image_url,
+                duration_ms=track.duration_ms,
+                spotify_uri=track.spotify_uri,
+                requester_name=source_name,
+                status=RequestStatus.added.value,
+                spotify_result_json=json.dumps(
+                    {
+                        "mode": "spotify",
+                        "added": True,
+                        "reason": "Imported from host playlist",
+                    },
+                    ensure_ascii=False,
+                ),
+                created_at=now - timedelta(seconds=index),
+            )
+        )
+        existing_ids.add(track.id)
+        imported += 1
+    return imported
 
 
 def _spotify_user_name(user: dict[str, Any], fallback: str) -> str:
@@ -746,12 +796,30 @@ async def select_host_playlist(
     if not data["playlist_id"]:
         return _spotify_retry_html(room, "host", "Spotify playlist id가 비어 있습니다. 다시 연결하세요.")
 
+    host_playlist_tracks: list[Track] = []
+    if not create:
+        try:
+            host_playlist_tracks = await spotify.get_playlist_tracks(
+                data["playlist_id"],
+                access_token=access_token,
+                max_items=50,
+            )
+        except Exception as exc:
+            return _spotify_retry_html(
+                room,
+                "host",
+                _external_error_detail(exc),
+                "기존 플레이리스트의 곡 목록을 불러오지 못했습니다.",
+            )
+
     async with _room_spotify_lock(room.id):
         db.refresh(room)
         room.host_spotify_refresh_token = refresh_token
         room.host_spotify_user_id = user.get("id")
         room.host_spotify_display_name = _spotify_user_name(user, room.host_name)
         _apply_room_playlist_payload(room, playlist)
+        if host_playlist_tracks:
+            _seed_room_requests_from_playlist(db, room, host_playlist_tracks)
         db.commit()
 
     _pending_spotify_choices.pop(choice_id, None)

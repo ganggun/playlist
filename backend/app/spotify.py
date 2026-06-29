@@ -368,6 +368,9 @@ class SpotifyClient:
 
     @staticmethod
     def _parse_playlist_track(item: dict[str, Any]) -> Track | None:
+        if item.get("type") and item.get("type") != "track":
+            return None
+
         track_id = item.get("id")
         name = item.get("name")
         if not track_id or not name:
