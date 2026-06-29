@@ -30,6 +30,7 @@ const tabs = [
 export default function App() {
   const { width } = useWindowDimensions();
   const isWide = width >= 980;
+  const isCompact = width < 640;
   const [room, setRoom] = useState(null);
   const [activeTab, setActiveTab] = useState("search");
   const [roomCode, setRoomCode] = useState("");
@@ -319,16 +320,17 @@ export default function App() {
               <LibraryPanel room={room} requests={latestRequests} leaveRoom={leaveRoom} />
             ) : null}
 
-            <View style={styles.mainPanel}>
+            <View style={[styles.mainPanel, isCompact && styles.mainPanelMobile]}>
               <RoomHero
                 room={room}
                 stats={stats}
+                compact={isCompact}
                 onRefresh={() => refreshRoomSpotify(room.code)}
                 onHostLogin={openHostLogin}
                 onOpenPlaylist={() => room.spotify_playlist_url && openUrl(room.spotify_playlist_url)}
               />
 
-              <View style={styles.tabBar}>
+              <View style={[styles.tabBar, isCompact && styles.tabBarCompact]}>
                 {tabs.map((tab) => (
                   <Pressable
                     key={tab.key}
@@ -342,8 +344,8 @@ export default function App() {
                 ))}
               </View>
 
-              {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-              {error ? <Text style={styles.error}>{error}</Text> : null}
+              {notice ? <Text style={[styles.notice, isCompact && styles.noticeCompact]}>{notice}</Text> : null}
+              {error ? <Text style={[styles.error, isCompact && styles.errorCompact]}>{error}</Text> : null}
 
               {activeTab === "search" ? (
                 <SearchTab
@@ -357,6 +359,7 @@ export default function App() {
                   searchTracks={searchTracks}
                   addTrack={addTrack}
                   requests={requests}
+                  compact={isCompact}
                 />
               ) : null}
 
@@ -369,6 +372,7 @@ export default function App() {
                   onHostDisconnect={disconnectHostSpotify}
                   onRefresh={() => refreshRoomSpotify(room.code)}
                   onOpenPlaylist={() => room.spotify_playlist_url && openUrl(room.spotify_playlist_url)}
+                  compact={isCompact}
                 />
               ) : null}
 
@@ -381,6 +385,7 @@ export default function App() {
                   playlistTrackErrors={playlistTrackErrors}
                   trackLoadingId={trackLoadingId}
                   onTogglePlaylist={toggleSharedPlaylist}
+                  compact={isCompact}
                 />
               ) : null}
             </View>
@@ -489,36 +494,36 @@ function LibraryPanel({ room, requests, leaveRoom }) {
   );
 }
 
-function RoomHero({ room, stats, onRefresh, onHostLogin, onOpenPlaylist }) {
+function RoomHero({ room, stats, compact, onRefresh, onHostLogin, onOpenPlaylist }) {
   return (
-    <View style={styles.hero}>
-      <View style={styles.heroArtWrap}>
+    <View style={[styles.hero, compact && styles.heroCompact]}>
+      <View style={[styles.heroArtWrap, compact && styles.heroArtWrapCompact]}>
         {room.spotify_playlist_image_url ? (
-          <Image source={{ uri: room.spotify_playlist_image_url }} style={styles.heroArt} />
+          <Image source={{ uri: room.spotify_playlist_image_url }} style={[styles.heroArt, compact && styles.heroArtCompact]} />
         ) : (
-          <AlbumFallback text={room.name} size={132} />
+          <AlbumFallback text={room.name} size={compact ? 64 : 132} />
         )}
       </View>
       <View style={styles.heroCopy}>
-        <Text style={styles.heroType}>공유 신청곡 방</Text>
-        <Text style={styles.heroTitle} numberOfLines={2}>{room.name}</Text>
-        <Text style={styles.heroMeta} numberOfLines={1}>
+        <Text style={[styles.heroType, compact && styles.heroTypeCompact]}>공유 신청곡 방</Text>
+        <Text style={[styles.heroTitle, compact && styles.heroTitleCompact]} numberOfLines={compact ? 1 : 2}>{room.name}</Text>
+        <Text style={[styles.heroMeta, compact && styles.heroMetaCompact]} numberOfLines={1}>
           {room.host_spotify_display_name || room.host_name} · {room.request_count}곡 · 코드 {room.code}
         </Text>
-        <View style={styles.heroActions}>
-          <Pressable style={styles.playButton} onPress={onOpenPlaylist}>
-            <Text style={styles.playButtonText}>▶</Text>
+        <View style={[styles.heroActions, compact && styles.heroActionsCompact]}>
+          <Pressable style={[styles.playButton, compact && styles.playButtonCompact]} onPress={onOpenPlaylist}>
+            <Text style={[styles.playButtonText, compact && styles.playButtonTextCompact]}>▶</Text>
           </Pressable>
-          <Pressable style={styles.pillButton} onPress={onHostLogin}>
-            <Text style={styles.pillButtonText}>
-              {room.spotify_connected ? "Spotify 연결됨" : "방장 연결"}
+          <Pressable style={[styles.pillButton, compact && styles.pillButtonCompact]} onPress={onHostLogin}>
+            <Text style={[styles.pillButtonText, compact && styles.pillButtonTextCompact]}>
+              {room.spotify_connected ? (compact ? "변경" : "Spotify 연결됨") : (compact ? "연결" : "방장 연결")}
             </Text>
           </Pressable>
-          <Pressable style={styles.iconPill} onPress={onRefresh}>
-            <Text style={styles.iconPillText}>새로고침</Text>
+          <Pressable style={[styles.iconPill, compact && styles.iconPillCompact]} onPress={onRefresh}>
+            <Text style={[styles.iconPillText, compact && styles.iconPillTextCompact]}>{compact ? "갱신" : "새로고침"}</Text>
           </Pressable>
         </View>
-        {stats ? <Text style={styles.heroInsight} numberOfLines={2}>{stats.insight}</Text> : null}
+        {stats && !compact ? <Text style={styles.heroInsight} numberOfLines={2}>{stats.insight}</Text> : null}
       </View>
     </View>
   );
@@ -534,17 +539,18 @@ function SearchTab({
   busyId,
   searchTracks,
   addTrack,
-  requests
+  requests,
+  compact
 }) {
   return (
-    <View style={styles.tabContent}>
-      <View style={styles.searchControls}>
+    <View style={[styles.tabContent, compact && styles.tabContentCompact]}>
+      <View style={[styles.searchControls, compact && styles.searchControlsCompact]}>
         <TextInput
           value={query}
           onChangeText={setQuery}
           placeholder="어떤 음악을 신청할까요?"
           placeholderTextColor="#8A8A8A"
-          style={styles.searchInput}
+          style={[styles.searchInput, compact && styles.searchInputCompact]}
           returnKeyType="search"
           onSubmitEditing={() => searchTracks(query)}
         />
@@ -553,10 +559,10 @@ function SearchTab({
           onChangeText={setRequesterName}
           placeholder="이름"
           placeholderTextColor="#8A8A8A"
-          style={styles.nameInput}
+          style={[styles.nameInput, compact && styles.nameInputCompact]}
           maxLength={30}
         />
-        <Pressable style={styles.greenButtonSmall} onPress={() => searchTracks(query)}>
+        <Pressable style={[styles.greenButtonSmall, compact && styles.greenButtonCompact]} onPress={() => searchTracks(query)}>
           <Text style={styles.greenButtonText}>검색</Text>
         </Pressable>
       </View>
@@ -603,10 +609,10 @@ function RecentRequests({ requests }) {
   );
 }
 
-function RoomTab({ room, stats, requests, onHostLogin, onHostDisconnect, onRefresh, onOpenPlaylist }) {
+function RoomTab({ room, stats, requests, onHostLogin, onHostDisconnect, onRefresh, onOpenPlaylist, compact }) {
   const qrUrl = `${API_URL}/api/rooms/${room.code}/qr`;
   return (
-    <ScrollView contentContainerStyle={styles.tabScroll}>
+    <ScrollView contentContainerStyle={[styles.tabScroll, compact && styles.tabScrollCompact]}>
       <View style={styles.roomGrid}>
         <View style={styles.infoCard}>
           <Text style={styles.cardTitle}>입장 코드</Text>
@@ -666,10 +672,11 @@ function ShareTab({
   playlistTracks,
   playlistTrackErrors,
   trackLoadingId,
-  onTogglePlaylist
+  onTogglePlaylist,
+  compact
 }) {
   return (
-    <ScrollView contentContainerStyle={styles.tabScroll}>
+    <ScrollView contentContainerStyle={[styles.tabScroll, compact && styles.tabScrollCompact]}>
       <View style={styles.shareHeader}>
         <View>
           <Text style={styles.sectionTitle}>공유 플레이리스트</Text>
@@ -978,6 +985,9 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     minHeight: 0
   },
+  mainPanelMobile: {
+    borderRadius: 0
+  },
   rightPanel: {
     width: 300,
     backgroundColor: "#121212",
@@ -1025,16 +1035,31 @@ const styles = StyleSheet.create({
     gap: 24,
     padding: 28
   },
+  heroCompact: {
+    minHeight: 132,
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12
+  },
   heroArtWrap: {
     shadowColor: "#000",
     shadowOpacity: 0.35,
     shadowRadius: 16
+  },
+  heroArtWrapCompact: {
+    shadowOpacity: 0.22,
+    shadowRadius: 8
   },
   heroArt: {
     width: 132,
     height: 132,
     borderRadius: 6,
     backgroundColor: "#282828"
+  },
+  heroArtCompact: {
+    width: 64,
+    height: 64
   },
   heroCopy: {
     flex: 1,
@@ -1046,10 +1071,18 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginBottom: 8
   },
+  heroTypeCompact: {
+    fontSize: 11,
+    marginBottom: 2
+  },
   heroTitle: {
     color: "#FFFFFF",
     fontSize: 52,
     fontWeight: "900"
+  },
+  heroTitleCompact: {
+    fontSize: 25,
+    lineHeight: 30
   },
   heroMeta: {
     color: "#F4D8CC",
@@ -1057,12 +1090,20 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginTop: 8
   },
+  heroMetaCompact: {
+    fontSize: 12,
+    marginTop: 3
+  },
   heroActions: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     marginTop: 18,
     flexWrap: "wrap"
+  },
+  heroActionsCompact: {
+    gap: 7,
+    marginTop: 8
   },
   heroInsight: {
     color: "#F2C9BA",
@@ -1077,11 +1118,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center"
   },
+  playButtonCompact: {
+    width: 38,
+    height: 38,
+    borderRadius: 19
+  },
   playButtonText: {
     color: "#000000",
     fontSize: 24,
     fontWeight: "900",
     marginLeft: 3
+  },
+  playButtonTextCompact: {
+    fontSize: 17,
+    marginLeft: 2
   },
   pillButton: {
     backgroundColor: "rgba(0,0,0,0.26)",
@@ -1089,10 +1139,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 11
   },
+  pillButtonCompact: {
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 8
+  },
   pillButtonText: {
     color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "900"
+  },
+  pillButtonTextCompact: {
+    fontSize: 12
   },
   iconPill: {
     backgroundColor: "rgba(255,255,255,0.12)",
@@ -1100,10 +1158,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10
   },
+  iconPillCompact: {
+    borderRadius: 18,
+    paddingHorizontal: 11,
+    paddingVertical: 8
+  },
   iconPillText: {
     color: "#FFFFFF",
     fontSize: 13,
     fontWeight: "800"
+  },
+  iconPillTextCompact: {
+    fontSize: 12
   },
   tabBar: {
     flexDirection: "row",
@@ -1111,6 +1177,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 18,
     backgroundColor: "#121212"
+  },
+  tabBarCompact: {
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingTop: 10
   },
   tabButton: {
     borderRadius: 999,
@@ -1135,15 +1206,27 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     minHeight: 0
   },
+  tabContentCompact: {
+    paddingHorizontal: 14,
+    paddingTop: 12
+  },
   tabScroll: {
     padding: 24,
     gap: 14
+  },
+  tabScrollCompact: {
+    padding: 14,
+    gap: 12
   },
   searchControls: {
     flexDirection: "row",
     gap: 10,
     flexWrap: "wrap",
     marginBottom: 16
+  },
+  searchControlsCompact: {
+    gap: 8,
+    marginBottom: 10
   },
   input: {
     backgroundColor: "#242424",
@@ -1163,6 +1246,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     fontSize: 15
   },
+  searchInputCompact: {
+    flexBasis: "100%",
+    minWidth: 0,
+    minHeight: 42,
+    paddingHorizontal: 14,
+    fontSize: 14
+  },
   nameInput: {
     backgroundColor: "#242424",
     borderRadius: 24,
@@ -1171,6 +1261,13 @@ const styles = StyleSheet.create({
     minHeight: 48,
     paddingHorizontal: 16,
     fontSize: 15
+  },
+  nameInputCompact: {
+    flex: 1,
+    width: 0,
+    minHeight: 42,
+    paddingHorizontal: 14,
+    fontSize: 14
   },
   greenButton: {
     backgroundColor: "#1ED760",
@@ -1187,6 +1284,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18
+  },
+  greenButtonCompact: {
+    minHeight: 42,
+    paddingHorizontal: 16
   },
   greenButtonText: {
     color: "#000000",
@@ -1245,6 +1346,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "800"
   },
+  noticeCompact: {
+    marginHorizontal: 14,
+    marginTop: 8,
+    fontSize: 13
+  },
   error: {
     color: "#FFB4A8",
     backgroundColor: "#3A1712",
@@ -1252,6 +1358,12 @@ const styles = StyleSheet.create({
     padding: 12,
     marginTop: 12,
     overflow: "hidden"
+  },
+  errorCompact: {
+    marginHorizontal: 14,
+    marginTop: 8,
+    padding: 10,
+    fontSize: 13
   },
   inlineError: {
     color: "#FFB4A8",
