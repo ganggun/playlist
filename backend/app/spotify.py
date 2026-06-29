@@ -8,6 +8,9 @@ from .config import settings
 from .models import Track
 
 
+SPOTIFY_LANGUAGE_HEADER = "ko-KR,ko;q=0.9,en;q=0.7"
+
+
 class SpotifyAuthError(RuntimeError):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
@@ -55,7 +58,10 @@ class SpotifyClient:
             return None
 
         params = {"q": query, "type": "track", "limit": 10, "market": "KR"}
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept-Language": SPOTIFY_LANGUAGE_HEADER,
+        }
 
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(
@@ -178,7 +184,10 @@ class SpotifyClient:
         if not token:
             raise SpotifyAuthError("Spotify token is empty")
 
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept-Language": SPOTIFY_LANGUAGE_HEADER,
+        }
         params = {"fields": "id,name,description,images,external_urls,tracks(total),owner"}
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(
@@ -204,7 +213,10 @@ class SpotifyClient:
         if not token:
             raise SpotifyAuthError("Spotify token is empty")
 
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept-Language": SPOTIFY_LANGUAGE_HEADER,
+        }
         params = {
             "limit": min(max_items, 100),
             "offset": 0,
