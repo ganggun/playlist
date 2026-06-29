@@ -73,4 +73,24 @@ class SharedPlaylistORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     room: Mapped[RoomORM] = relationship(back_populates="shared_playlists")
+    tracks: Mapped[list["SharedPlaylistTrackORM"]] = relationship(
+        back_populates="shared_playlist",
+        cascade="all, delete-orphan",
+    )
 
+
+class SharedPlaylistTrackORM(Base):
+    __tablename__ = "shared_playlist_tracks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    shared_playlist_id: Mapped[str] = mapped_column(ForeignKey("shared_playlists.id"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    track_id: Mapped[str] = mapped_column(String(160))
+    track_name: Mapped[str] = mapped_column(String(240))
+    artists_json: Mapped[str] = mapped_column(Text)
+    album: Mapped[str] = mapped_column(String(240), default="")
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    spotify_uri: Mapped[str | None] = mapped_column(String(240), nullable=True)
+
+    shared_playlist: Mapped[SharedPlaylistORM] = relationship(back_populates="tracks")

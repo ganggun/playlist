@@ -39,6 +39,9 @@ export default function App() {
   const [tracks, setTracks] = useState([]);
   const [requests, setRequests] = useState([]);
   const [sharedPlaylists, setSharedPlaylists] = useState([]);
+  const [expandedPlaylistId, setExpandedPlaylistId] = useState("");
+  const [playlistTracks, setPlaylistTracks] = useState({});
+  const [trackLoadingId, setTrackLoadingId] = useState("");
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState("");
@@ -135,6 +138,24 @@ export default function App() {
     }
   }
 
+  async function refreshRoomSpotify(code = room?.code) {
+    if (!code) return;
+    setLoading(true);
+    setError("");
+    try {
+      const normalized = code.trim().toUpperCase();
+      const currentRoom = room?.code === normalized ? room : await api(`/api/rooms/${normalized}`);
+      if (currentRoom?.spotify_connected) {
+        await api(`/api/rooms/${normalized}/spotify/refresh`, { method: "POST" });
+      }
+      await loadRoom(normalized);
+    } catch (err) {
+      setError("방 정보를 갱신하지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function addTrack(track) {
     if (!room) return;
     setBusyId(track.id);
@@ -208,11 +229,39 @@ export default function App() {
     if (room) openUrl(`${API_URL}/api/rooms/${room.code}/spotify/share/login`);
   }
 
+  async function toggleSharedPlaylist(playlist) {
+    if (!room) return;
+    if (expandedPlaylistId === playlist.id) {
+      setExpandedPlaylistId("");
+      return;
+    }
+
+    setExpandedPlaylistId(playlist.id);
+    if (playlistTracks[playlist.id]) return;
+
+    setTrackLoadingId(playlist.id);
+    setError("");
+    try {
+      const nextTracks = await api(`/api/rooms/${room.code}/shared-playlists/${playlist.id}/tracks`);
+      setPlaylistTracks((current) => ({
+        ...current,
+        [playlist.id]: nextTracks
+      }));
+    } catch (err) {
+      setError("공유 플레이리스트 곡 목록을 불러오지 못했습니다.");
+    } finally {
+      setTrackLoadingId("");
+    }
+  }
+
   function leaveRoom() {
     setRoom(null);
     setTracks([]);
     setRequests([]);
     setSharedPlaylists([]);
+    setExpandedPlaylistId("");
+    setPlaylistTracks({});
+    setTrackLoadingId("");
     setStats(null);
     setNotice("");
     forgetRoom();
@@ -254,7 +303,7 @@ export default function App() {
               <RoomHero
                 room={room}
                 stats={stats}
-                onRefresh={() => loadRoom(room.code)}
+                onRefresh={() => refreshRoomSpotify(room.code)}
                 onHostLogin={openHostLogin}
                 onOpenPlaylist={() => room.spotify_playlist_url && openUrl(room.spotify_playlist_url)}
               />
@@ -298,7 +347,7 @@ export default function App() {
                   requests={requests}
                   onHostLogin={openHostLogin}
                   onHostDisconnect={disconnectHostSpotify}
-                  onRefresh={() => loadRoom(room.code)}
+                  onRefresh={() => refreshRoomSpotify(room.code)}
                   onOpenPlaylist={() => room.spotify_playlist_url && openUrl(room.spotify_playlist_url)}
                 />
               ) : null}
@@ -307,7 +356,10 @@ export default function App() {
                 <ShareTab
                   sharedPlaylists={sharedPlaylists}
                   openShareLogin={openShareLogin}
-                  openUrl={openUrl}
+                  expandedPlaylistId={expandedPlaylistId}
+                  playlistTracks={playlistTracks}
+                  trackLoadingId={trackLoadingId}
+                  onTogglePlaylist={toggleSharedPlaylist}
                 />
               ) : null}
             </View>
@@ -318,7 +370,6 @@ export default function App() {
                 stats={stats}
                 sharedPlaylists={sharedPlaylists}
                 openShareLogin={openShareLogin}
-                openUrl={openUrl}
               />
             ) : null}
           </View>
@@ -587,7 +638,14 @@ function RoomTab({ room, stats, requests, onHostLogin, onHostDisconnect, onRefre
   );
 }
 
-function ShareTab({ sharedPlaylists, openShareLogin, openUrl }) {
+function ShareTab({
+  sharedPlaylists,
+  openShareLogin,
+  expandedPlaylistId,
+  playlistTracks,
+  trackLoadingId,
+  onTogglePlaylist
+}) {
   return (
     <ScrollView contentContainerStyle={styles.tabScroll}>
       <View style={styles.shareHeader}>
@@ -604,29 +662,71 @@ function ShareTab({ sharedPlaylists, openShareLogin, openUrl }) {
         <Text style={styles.emptyText}>공유된 플레이리스트가 없습니다.</Text>
       ) : (
         sharedPlaylists.map((playlist) => (
-          <Pressable
+          <SharedPlaylistCard
             key={playlist.id}
-            style={styles.playlistCard}
-            onPress={() => playlist.external_url && openUrl(playlist.external_url)}
-          >
-            {playlist.image_url ? (
-              <Image source={{ uri: playlist.image_url }} style={styles.playlistImage} />
-            ) : (
-              <AlbumFallback text={playlist.name} size={72} />
-            )}
-            <View style={styles.flex}>
-              <Text style={styles.itemTitle} numberOfLines={1}>{playlist.name}</Text>
-              <Text style={styles.mutedText} numberOfLines={1}>{playlist.owner_name}</Text>
-              <Text style={styles.softText}>{playlist.track_count}곡</Text>
-            </View>
-          </Pressable>
+            playlist={playlist}
+            isOpen={expandedPlaylistId === playlist.id}
+            tracks={playlistTracks[playlist.id] || []}
+            loading={trackLoadingId === playlist.id}
+            onToggle={() => onTogglePlaylist(playlist)}
+          />
         ))
       )}
     </ScrollView>
   );
 }
 
-function RightPanel({ room, stats, sharedPlaylists, openShareLogin, openUrl }) {
+function SharedPlaylistCard({ playlist, isOpen, tracks, loading, onToggle }) {
+  return (
+    <View style={[styles.playlistCard, isOpen && styles.playlistCardOpen]}>
+      <Pressable style={styles.playlistCardHeader} onPress={onToggle}>
+        {playlist.image_url ? (
+          <Image source={{ uri: playlist.image_url }} style={styles.playlistImage} />
+        ) : (
+          <AlbumFallback text={playlist.name} size={72} />
+        )}
+        <View style={styles.flex}>
+          <Text style={styles.itemTitle} numberOfLines={1}>{playlist.name}</Text>
+          <Text style={styles.mutedText} numberOfLines={1}>{playlist.owner_name}</Text>
+          <Text style={styles.softText}>{playlist.track_count}곡</Text>
+        </View>
+        <Text style={styles.chevronText}>{isOpen ? "접기" : "보기"}</Text>
+      </Pressable>
+
+      {isOpen ? (
+        <View style={styles.sharedTrackList}>
+          {loading ? (
+            <View style={styles.loadingArea}>
+              <ActivityIndicator color="#1ED760" />
+            </View>
+          ) : tracks.length ? (
+            tracks.map((track, index) => (
+              <SharedTrackRow key={`${track.id}-${index}`} track={track} index={index + 1} />
+            ))
+          ) : (
+            <Text style={styles.emptyText}>표시할 곡이 없습니다.</Text>
+          )}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function SharedTrackRow({ track, index }) {
+  return (
+    <View style={styles.sharedTrackRow}>
+      <Text style={styles.trackIndex}>{index}</Text>
+      <AlbumArt track={track} size={42} />
+      <View style={styles.flex}>
+        <Text style={styles.itemTitle} numberOfLines={1}>{track.name}</Text>
+        <Text style={styles.mutedText} numberOfLines={1}>{track.artists.join(", ")}</Text>
+      </View>
+      <Text style={styles.softText}>{formatDuration(track.duration_ms)}</Text>
+    </View>
+  );
+}
+
+function RightPanel({ room, stats, sharedPlaylists, openShareLogin }) {
   const qrUrl = `${API_URL}/api/rooms/${room.code}/qr`;
   return (
     <View style={styles.rightPanel}>
@@ -653,7 +753,7 @@ function RightPanel({ room, stats, sharedPlaylists, openShareLogin, openUrl }) {
           </Pressable>
         </View>
         {sharedPlaylists.slice(0, 3).map((playlist) => (
-          <Pressable key={playlist.id} style={styles.miniPlaylist} onPress={() => playlist.external_url && openUrl(playlist.external_url)}>
+          <View key={playlist.id} style={styles.miniPlaylist}>
             {playlist.image_url ? (
               <Image source={{ uri: playlist.image_url }} style={styles.miniImage} />
             ) : (
@@ -663,7 +763,7 @@ function RightPanel({ room, stats, sharedPlaylists, openShareLogin, openUrl }) {
               <Text style={styles.miniTitle} numberOfLines={1}>{playlist.name}</Text>
               <Text style={styles.mutedText} numberOfLines={1}>{playlist.owner_name}</Text>
             </View>
-          </Pressable>
+          </View>
         ))}
       </View>
     </View>
@@ -768,6 +868,14 @@ function spotifyFailureMessage(request) {
   return reason
     ? `신청은 저장했지만 Spotify 추가에 실패했습니다. 사유: ${reason}`
     : "신청은 저장했지만 Spotify 추가에 실패했습니다.";
+}
+
+function formatDuration(durationMs) {
+  if (!durationMs) return "";
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
 }
 
 const styles = StyleSheet.create({
@@ -1270,10 +1378,16 @@ const styles = StyleSheet.create({
     gap: 12
   },
   playlistCard: {
-    flexDirection: "row",
-    alignItems: "center",
     backgroundColor: "#181818",
     borderRadius: 8,
+    overflow: "hidden"
+  },
+  playlistCardOpen: {
+    backgroundColor: "#202020"
+  },
+  playlistCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
     padding: 12,
     gap: 12
   },
@@ -1282,6 +1396,23 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: 6,
     backgroundColor: "#282828"
+  },
+  chevronText: {
+    color: "#1ED760",
+    fontSize: 13,
+    fontWeight: "900"
+  },
+  sharedTrackList: {
+    borderTopWidth: 1,
+    borderTopColor: "#2A2A2A",
+    paddingVertical: 8,
+    paddingHorizontal: 12
+  },
+  sharedTrackRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8
   },
   sideQr: {
     width: 150,

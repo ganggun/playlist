@@ -168,6 +168,77 @@ class SpotifyClient:
             response.raise_for_status()
         return response.json().get("items", [])
 
+    async def get_playlist(
+        self,
+        playlist_id: str,
+        access_token: str | None = None,
+        refresh_token: str | None = None,
+    ) -> dict[str, Any]:
+        token = access_token or await self._get_user_token(refresh_token) or await self._get_app_token()
+        if not token:
+            raise SpotifyAuthError("Spotify token is empty")
+
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"fields": "id,name,description,images,external_urls,tracks(total),owner"}
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                f"https://api.spotify.com/v1/playlists/{playlist_id}",
+                headers=headers,
+                params=params,
+            )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._api_error_message(response, "Spotify playlist request failed")
+            raise SpotifyAuthError(detail, status_code=response.status_code) from exc
+        return response.json()
+
+    async def get_playlist_tracks(
+        self,
+        playlist_id: str,
+        access_token: str | None = None,
+        refresh_token: str | None = None,
+        max_items: int = 50,
+    ) -> list[Track]:
+        token = access_token or await self._get_user_token(refresh_token) or await self._get_app_token()
+        if not token:
+            raise SpotifyAuthError("Spotify token is empty")
+
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {
+            "limit": min(max_items, 100),
+            "offset": 0,
+            "fields": "items(track(id,name,uri,duration_ms,album(name,images),artists(name))),next",
+            "market": "KR",
+        }
+        tracks: list[Track] = []
+        async with httpx.AsyncClient(timeout=10) as client:
+            while len(tracks) < max_items:
+                response = await client.get(
+                    f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks",
+                    headers=headers,
+                    params=params,
+                )
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    detail = self._api_error_message(response, "Spotify playlist tracks request failed")
+                    raise SpotifyAuthError(detail, status_code=response.status_code) from exc
+
+                data = response.json()
+                for item in data.get("items", []):
+                    track = self._parse_playlist_track(item.get("track") or {})
+                    if track:
+                        tracks.append(track)
+                    if len(tracks) >= max_items:
+                        break
+
+                if not data.get("next") or len(tracks) >= max_items:
+                    break
+                params["offset"] += params["limit"]
+
+        return tracks
+
     async def _get_user_token(self, refresh_token: str | None = None) -> str | None:
         if refresh_token:
             token_data = await self._token_request(
@@ -268,6 +339,26 @@ class SpotifyClient:
             artists=[artist["name"] for artist in item.get("artists", [])],
             album=item.get("album", {}).get("name", ""),
             image_url=images[0]["url"] if images else None,
+            duration_ms=item.get("duration_ms"),
+            spotify_uri=item.get("uri"),
+        )
+
+    @staticmethod
+    def _parse_playlist_track(item: dict[str, Any]) -> Track | None:
+        track_id = item.get("id")
+        name = item.get("name")
+        if not track_id or not name:
+            return None
+
+        album = item.get("album") or {}
+        images = album.get("images") or []
+        artists = item.get("artists") or []
+        return Track(
+            id=track_id,
+            name=name,
+            artists=[artist.get("name", "") for artist in artists if artist.get("name")],
+            album=album.get("name") or "",
+            image_url=images[0].get("url") if images else None,
             duration_ms=item.get("duration_ms"),
             spotify_uri=item.get("uri"),
         )

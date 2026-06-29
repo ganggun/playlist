@@ -31,7 +31,7 @@ from .models import (
     Track,
     Venue,
 )
-from .orm import RoomORM, SharedPlaylistORM, SongRequestORM
+from .orm import RoomORM, SharedPlaylistORM, SharedPlaylistTrackORM, SongRequestORM
 from .spotify import SpotifyAuthError, spotify
 from .store import DEMO_TRACKS, store
 
@@ -153,6 +153,18 @@ def _track_from_request(row: SongRequestORM) -> Track:
     )
 
 
+def _track_from_shared_row(row: SharedPlaylistTrackORM) -> Track:
+    return Track(
+        id=row.track_id,
+        name=row.track_name,
+        artists=_json_list(row.artists_json),
+        album=row.album,
+        image_url=row.image_url,
+        duration_ms=row.duration_ms,
+        spotify_uri=row.spotify_uri,
+    )
+
+
 def _request_to_schema(row: SongRequestORM) -> RoomSongRequest:
     return RoomSongRequest(
         id=row.id,
@@ -189,6 +201,46 @@ def _playlist_payload(item: dict[str, Any]) -> dict[str, Any]:
         "external_url": (item.get("external_urls") or {}).get("spotify"),
         "track_count": tracks.get("total") or 0,
     }
+
+
+def _apply_room_playlist_payload(room: RoomORM, playlist: dict[str, Any]) -> None:
+    data = _playlist_payload(playlist)
+    if data["playlist_id"]:
+        room.spotify_playlist_id = data["playlist_id"]
+    room.spotify_playlist_name = data["name"]
+    room.spotify_playlist_url = data["external_url"]
+    room.spotify_playlist_image_url = data["image_url"]
+
+
+async def _refresh_room_playlist_metadata(room: RoomORM) -> None:
+    if not room.host_spotify_refresh_token or not room.spotify_playlist_id:
+        return
+    playlist = await spotify.get_playlist(
+        playlist_id=room.spotify_playlist_id,
+        refresh_token=room.host_spotify_refresh_token,
+    )
+    _apply_room_playlist_payload(room, playlist)
+
+
+def _replace_shared_playlist_tracks(db: Session, playlist: SharedPlaylistORM, tracks: list[Track]) -> None:
+    db.flush()
+    db.query(SharedPlaylistTrackORM).filter(
+        SharedPlaylistTrackORM.shared_playlist_id == playlist.id
+    ).delete()
+    for index, track in enumerate(tracks, start=1):
+        db.add(
+            SharedPlaylistTrackORM(
+                shared_playlist_id=playlist.id,
+                position=index,
+                track_id=track.id,
+                track_name=track.name,
+                artists_json=json.dumps(track.artists, ensure_ascii=False),
+                album=track.album,
+                image_url=track.image_url,
+                duration_ms=track.duration_ms,
+                spotify_uri=track.spotify_uri,
+            )
+        )
 
 
 def _spotify_user_name(user: dict[str, Any], fallback: str) -> str:
@@ -402,6 +454,27 @@ async def disconnect_room_spotify(code: str, db: Session = Depends(get_db)) -> R
     return _room_to_schema(db, room)
 
 
+@app.post("/api/rooms/{code}/spotify/refresh", response_model=RoomDetail)
+async def refresh_room_spotify(code: str, db: Session = Depends(get_db)) -> RoomDetail:
+    room = _get_room(db, code)
+    if not room.host_spotify_refresh_token or not room.spotify_playlist_id:
+        return _room_to_schema(db, room)
+
+    async with _room_spotify_lock(room.id):
+        db.refresh(room)
+        try:
+            await _refresh_room_playlist_metadata(room)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=_external_error_detail(exc),
+            ) from exc
+        db.commit()
+        db.refresh(room)
+
+    return _room_to_schema(db, room)
+
+
 @app.get("/api/rooms/{code}/qr")
 def room_qr(code: str, db: Session = Depends(get_db)) -> Response:
     room = _get_room(db, code)
@@ -463,6 +536,11 @@ async def create_room_song_request(
                     playlist_id=room.spotify_playlist_id,
                 )
                 row.status = RequestStatus.added.value if spotify_result.get("added") else RequestStatus.queued.value
+                if spotify_result.get("added"):
+                    try:
+                        await _refresh_room_playlist_metadata(room)
+                    except Exception:
+                        pass
             except Exception as exc:
                 spotify_result = {"mode": "spotify", "added": False, "reason": str(exc)}
                 row.status = RequestStatus.failed.value
@@ -495,6 +573,41 @@ def list_shared_playlists(code: str, db: Session = Depends(get_db)) -> list[Shar
         .all()
     )
     return [_shared_to_schema(row) for row in rows]
+
+
+@app.get("/api/rooms/{code}/shared-playlists/{shared_id}/tracks", response_model=list[Track])
+async def list_shared_playlist_tracks(
+    code: str,
+    shared_id: str,
+    db: Session = Depends(get_db),
+) -> list[Track]:
+    room = _get_room(db, code)
+    playlist = (
+        db.query(SharedPlaylistORM)
+        .filter(SharedPlaylistORM.room_id == room.id, SharedPlaylistORM.id == shared_id)
+        .first()
+    )
+    if playlist is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared playlist not found")
+
+    rows = (
+        db.query(SharedPlaylistTrackORM)
+        .filter(SharedPlaylistTrackORM.shared_playlist_id == playlist.id)
+        .order_by(SharedPlaylistTrackORM.position.asc())
+        .all()
+    )
+    if rows:
+        return [_track_from_shared_row(row) for row in rows]
+
+    try:
+        tracks = await spotify.get_playlist_tracks(playlist.playlist_id, max_items=50)
+    except Exception:
+        return []
+
+    _replace_shared_playlist_tracks(db, playlist, tracks)
+    playlist.track_count = max(playlist.track_count, len(tracks))
+    db.commit()
+    return tracks
 
 
 @app.get("/api/rooms/{code}/stats", response_model=RoomStats)
@@ -614,10 +727,7 @@ async def select_host_playlist(
         room.host_spotify_refresh_token = refresh_token
         room.host_spotify_user_id = user.get("id")
         room.host_spotify_display_name = _spotify_user_name(user, room.host_name)
-        room.spotify_playlist_id = data["playlist_id"]
-        room.spotify_playlist_name = data["name"]
-        room.spotify_playlist_url = data["external_url"]
-        room.spotify_playlist_image_url = data["image_url"]
+        _apply_room_playlist_payload(room, playlist)
         db.commit()
 
     _pending_spotify_choices.pop(choice_id, None)
@@ -625,7 +735,7 @@ async def select_host_playlist(
 
 
 @app.get("/api/spotify/choices/{choice_id}/share")
-def select_shared_playlist(
+async def select_shared_playlist(
     choice_id: str,
     playlist_id: str = Query(default=""),
     db: Session = Depends(get_db),
@@ -660,6 +770,17 @@ def select_shared_playlist(
     target.track_count = data["track_count"]
     if existing is None:
         db.add(target)
+    try:
+        tracks = await spotify.get_playlist_tracks(
+            data["playlist_id"],
+            access_token=choice.get("access_token", ""),
+            max_items=50,
+        )
+    except Exception:
+        tracks = []
+    _replace_shared_playlist_tracks(db, target, tracks)
+    if tracks:
+        target.track_count = max(target.track_count, len(tracks))
     db.commit()
 
     _pending_spotify_choices.pop(choice_id, None)
