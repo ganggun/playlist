@@ -525,8 +525,16 @@ def list_rooms(
 
 
 @app.get("/api/rooms/{code}", response_model=RoomDetail)
-def get_room(code: str, db: Session = Depends(get_db)) -> RoomDetail:
-    return _room_to_schema(db, _get_room(db, code))
+async def get_room(code: str, db: Session = Depends(get_db)) -> RoomDetail:
+    room = _get_room(db, code)
+    if room.host_spotify_refresh_token and room.spotify_playlist_id:
+        try:
+            await _refresh_room_playlist_metadata(room)
+            db.commit()
+            db.refresh(room)
+        except Exception:
+            db.rollback()
+    return _room_to_schema(db, room)
 
 
 @app.delete("/api/rooms/{code}/spotify", response_model=RoomDetail)
@@ -872,6 +880,12 @@ async def select_host_playlist(
     data = _playlist_payload(playlist)
     if not data["playlist_id"]:
         return _spotify_retry_html(room, "host", "Spotify playlist id가 비어 있습니다. 다시 연결하세요.")
+
+    try:
+        playlist = await spotify.get_playlist(data["playlist_id"], access_token=access_token)
+        data = _playlist_payload(playlist)
+    except Exception:
+        pass
 
     host_playlist_tracks: list[Track] = []
     if not create:

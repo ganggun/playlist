@@ -392,6 +392,7 @@ export default function App() {
                 room={room}
                 stats={stats}
                 compact={isCompact}
+                onLeaveRoom={leaveRoom}
                 onRefresh={() => refreshRoomSpotify(room.code)}
                 onHostLogin={openHostLogin}
                 onOpenPlaylist={() => room.spotify_playlist_url && openUrl(room.spotify_playlist_url)}
@@ -597,7 +598,15 @@ function LibraryPanel({ room, requests, leaveRoom }) {
         </Pressable>
       </View>
       <View style={styles.libraryItemActive}>
-        <AlbumFallback text={room.name} size={52} />
+        {room.spotify_playlist_image_url ? (
+          <Image
+            key={room.spotify_playlist_image_url}
+            source={{ uri: room.spotify_playlist_image_url }}
+            style={styles.libraryCover}
+          />
+        ) : (
+          <AlbumFallback text={room.name} size={52} />
+        )}
         <View style={styles.flex}>
           <Text style={styles.itemTitle} numberOfLines={1}>{room.name}</Text>
           <Text style={styles.mutedText}>{room.code}</Text>
@@ -621,18 +630,29 @@ function LibraryPanel({ room, requests, leaveRoom }) {
   );
 }
 
-function RoomHero({ room, stats, compact, onRefresh, onHostLogin, onOpenPlaylist }) {
+function RoomHero({ room, stats, compact, onLeaveRoom, onRefresh, onHostLogin, onOpenPlaylist }) {
   return (
     <View style={[styles.hero, compact && styles.heroCompact]}>
       <View style={[styles.heroArtWrap, compact && styles.heroArtWrapCompact]}>
         {room.spotify_playlist_image_url ? (
-          <Image source={{ uri: room.spotify_playlist_image_url }} style={[styles.heroArt, compact && styles.heroArtCompact]} />
+          <Image
+            key={room.spotify_playlist_image_url}
+            source={{ uri: room.spotify_playlist_image_url }}
+            style={[styles.heroArt, compact && styles.heroArtCompact]}
+          />
         ) : (
           <AlbumFallback text={room.name} size={compact ? 64 : 132} />
         )}
       </View>
       <View style={styles.heroCopy}>
-        <Text style={[styles.heroType, compact && styles.heroTypeCompact]}>공유 신청곡 방</Text>
+        <View style={styles.heroTopLine}>
+          <Text style={[styles.heroType, compact && styles.heroTypeCompact]}>공유 신청곡 방</Text>
+          {compact ? (
+            <Pressable style={styles.heroExitButton} onPress={onLeaveRoom}>
+              <Text style={styles.heroExitText}>나가기</Text>
+            </Pressable>
+          ) : null}
+        </View>
         <Text style={[styles.heroTitle, compact && styles.heroTitleCompact]} numberOfLines={compact ? 1 : 2}>{room.name}</Text>
         <Text style={[styles.heroMeta, compact && styles.heroMetaCompact]} numberOfLines={1}>
           {room.host_spotify_display_name || room.host_name} · {room.request_count}곡 · 코드 {room.code}
@@ -1263,6 +1283,12 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     padding: 8
   },
+  libraryCover: {
+    width: 52,
+    height: 52,
+    borderRadius: 6,
+    backgroundColor: "#282828"
+  },
   hero: {
     minHeight: 260,
     backgroundColor: "#9A2500",
@@ -1301,6 +1327,12 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0
   },
+  heroTopLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8
+  },
   heroType: {
     color: "#FFFFFF",
     fontSize: 13,
@@ -1309,7 +1341,19 @@ const styles = StyleSheet.create({
   },
   heroTypeCompact: {
     fontSize: 11,
-    marginBottom: 2
+    marginBottom: 2,
+    flexShrink: 1
+  },
+  heroExitButton: {
+    backgroundColor: "rgba(0,0,0,0.28)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6
+  },
+  heroExitText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "900"
   },
   heroTitle: {
     color: "#FFFFFF",
