@@ -213,7 +213,7 @@ class SpotifyClient:
         playlist_id: str,
         access_token: str | None = None,
         refresh_token: str | None = None,
-        max_items: int = 50,
+        max_items: int | None = 50,
     ) -> list[Track]:
         token = access_token or await self._get_user_token(refresh_token) or await self._get_app_token()
         if not token:
@@ -224,14 +224,14 @@ class SpotifyClient:
             "Accept-Language": SPOTIFY_LANGUAGE_HEADER,
         }
         params = {
-            "limit": min(max_items, 50),
+            "limit": min(max_items, 50) if max_items is not None else 50,
             "offset": 0,
             "fields": "items(item(id,name,uri,type,duration_ms,album(name,images),artists(name))),next",
             "market": "KR",
         }
         tracks: list[Track] = []
         async with httpx.AsyncClient(timeout=10) as client:
-            while len(tracks) < max_items:
+            while max_items is None or len(tracks) < max_items:
                 response = await client.get(
                     f"https://api.spotify.com/v1/playlists/{playlist_id}/items",
                     headers=headers,
@@ -252,10 +252,10 @@ class SpotifyClient:
                     track = self._parse_playlist_track(item.get("item") or item.get("track") or {})
                     if track:
                         tracks.append(track)
-                    if len(tracks) >= max_items:
+                    if max_items is not None and len(tracks) >= max_items:
                         break
 
-                if not data.get("next") or len(tracks) >= max_items:
+                if not data.get("next") or (max_items is not None and len(tracks) >= max_items):
                     break
                 params["offset"] += params["limit"]
 

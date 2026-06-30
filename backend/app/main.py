@@ -539,7 +539,7 @@ async def refresh_room_spotify(code: str, db: Session = Depends(get_db)) -> Room
                 tracks = await spotify.get_playlist_tracks(
                     room.spotify_playlist_id,
                     refresh_token=room.host_spotify_refresh_token,
-                    max_items=50,
+                    max_items=None,
                 )
                 _seed_room_requests_from_playlist(db, room, tracks)
         except Exception as exc:
@@ -678,7 +678,7 @@ async def list_shared_playlist_tracks(
         return [_track_from_shared_row(row) for row in rows]
 
     try:
-        tracks = await spotify.get_playlist_tracks(playlist.playlist_id, max_items=50)
+        tracks = await spotify.get_playlist_tracks(playlist.playlist_id, max_items=None)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -809,7 +809,7 @@ async def select_host_playlist(
             host_playlist_tracks = await spotify.get_playlist_tracks(
                 data["playlist_id"],
                 access_token=access_token,
-                max_items=50,
+                max_items=None,
             )
         except Exception as exc:
             return _spotify_retry_html(
@@ -883,7 +883,7 @@ async def select_shared_playlist(
         tracks = await spotify.get_playlist_tracks(
             data["playlist_id"],
             access_token=choice.get("access_token", ""),
-            max_items=50,
+            max_items=None,
         )
     except Exception as exc:
         return _spotify_retry_html(
