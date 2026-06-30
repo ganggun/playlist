@@ -20,6 +20,9 @@ import {
 
 const DEFAULT_API_URL = Platform.OS === "web" ? "http://localhost:8000" : "http://10.0.2.2:8000";
 const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? DEFAULT_API_URL).replace(/\/$/, "");
+const ACTIVE_PLAYBACK_POLL_MS = 5000;
+const IDLE_PLAYBACK_POLL_MS = 15000;
+const LOCAL_PLAYBACK_TICK_MS = 1000;
 
 const tabs = [
   { key: "search", label: "신청곡" },
@@ -351,11 +354,39 @@ export default function App() {
   useEffect(() => {
     if (!room?.code) return undefined;
     loadPlayback(room.code).catch(() => {});
+    const delay = playback?.is_playing ? ACTIVE_PLAYBACK_POLL_MS : IDLE_PLAYBACK_POLL_MS;
     const timer = setInterval(() => {
       loadPlayback(room.code).catch(() => {});
-    }, 15000);
+    }, delay);
     return () => clearInterval(timer);
-  }, [room?.code]);
+  }, [room?.code, playback?.is_playing]);
+
+  useEffect(() => {
+    if (!playback?.is_playing || !playback.track || playback.progress_ms == null || !playback.duration_ms) {
+      return undefined;
+    }
+
+    const trackId = playback.track.id;
+    const timer = setInterval(() => {
+      setPlayback((current) => {
+        if (
+          !current?.is_playing
+          || current.progress_ms == null
+          || !current.duration_ms
+          || current.track?.id !== trackId
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          progress_ms: Math.min(current.duration_ms, current.progress_ms + LOCAL_PLAYBACK_TICK_MS)
+        };
+      });
+    }, LOCAL_PLAYBACK_TICK_MS);
+
+    return () => clearInterval(timer);
+  }, [playback?.is_playing, playback?.track?.id, playback?.duration_ms]);
 
   return (
     <SafeAreaView style={styles.safe}>
