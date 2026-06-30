@@ -675,7 +675,17 @@ async def list_shared_playlist_tracks(
         .all()
     )
     if rows:
-        return [_track_from_shared_row(row) for row in rows]
+        stored_tracks = [_track_from_shared_row(row) for row in rows]
+        if not playlist.track_count or len(stored_tracks) >= playlist.track_count:
+            return stored_tracks
+        try:
+            tracks = await spotify.get_playlist_tracks(playlist.playlist_id, max_items=None)
+        except Exception:
+            return stored_tracks
+        _replace_shared_playlist_tracks(db, playlist, tracks)
+        playlist.track_count = max(playlist.track_count, len(tracks))
+        db.commit()
+        return tracks
 
     try:
         tracks = await spotify.get_playlist_tracks(playlist.playlist_id, max_items=None)
