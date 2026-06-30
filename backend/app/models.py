@@ -25,6 +25,16 @@ class Track(BaseModel):
     spotify_uri: str | None = None
 
 
+class PlaybackState(BaseModel):
+    is_connected: bool = False
+    is_playing: bool = False
+    track: Track | None = None
+    progress_ms: int | None = None
+    duration_ms: int | None = None
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    error: str | None = None
+
+
 class CreateSongRequest(BaseModel):
     track: Track
     requester_name: str = Field(default="익명", max_length=30)

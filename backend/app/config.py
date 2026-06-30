@@ -27,7 +27,7 @@ class Settings:
     spotify_playlist_id: str = os.getenv("SPOTIFY_PLAYLIST_ID", "")
     spotify_scope: str = os.getenv(
         "SPOTIFY_SCOPE",
-        "playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative user-read-private",
+        "playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative user-read-private user-read-currently-playing",
     )
 
     @property

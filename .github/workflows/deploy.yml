@@ -154,7 +154,7 @@ jobs:
             SPOTIFY_REFRESH_TOKEN=${SPOTIFY_REFRESH_TOKEN:-}
             SPOTIFY_ACCESS_TOKEN=${SPOTIFY_ACCESS_TOKEN:-}
             SPOTIFY_PLAYLIST_ID=${SPOTIFY_PLAYLIST_ID:-}
-            SPOTIFY_SCOPE=playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative user-read-private
+            SPOTIFY_SCOPE=playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative user-read-private user-read-currently-playing
             DATABASE_URL=sqlite:////data/playlist.db
             ENV
 

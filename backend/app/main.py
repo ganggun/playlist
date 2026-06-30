@@ -23,6 +23,7 @@ from .models import (
     AdminActionResponse,
     CreateRoomRequest,
     CreateSongRequest,
+    PlaybackState,
     RequestStatus,
     RoomDetail,
     RoomSongRequest,
@@ -572,6 +573,20 @@ async def refresh_room_spotify(code: str, db: Session = Depends(get_db)) -> Room
     return _room_to_schema(db, room)
 
 
+@app.get("/api/rooms/{code}/playback", response_model=PlaybackState)
+async def room_playback(code: str, db: Session = Depends(get_db)) -> PlaybackState:
+    room = _get_room(db, code)
+    if not room.host_spotify_refresh_token:
+        return PlaybackState(is_connected=False)
+
+    try:
+        playback = await spotify.get_currently_playing(refresh_token=room.host_spotify_refresh_token)
+    except Exception as exc:
+        return PlaybackState(is_connected=True, error=_external_error_detail(exc))
+
+    return PlaybackState(is_connected=True, **playback)
+
+
 @app.get("/api/rooms/{code}/qr")
 def room_qr(code: str, db: Session = Depends(get_db)) -> Response:
     room = _get_room(db, code)
@@ -589,6 +604,32 @@ def room_qr(code: str, db: Session = Depends(get_db)) -> Response:
 async def search_room_tracks(code: str, q: str = Query(default=""), db: Session = Depends(get_db)) -> list[Track]:
     _get_room(db, code)
     return await _search_tracks(q)
+
+
+@app.get("/api/rooms/{code}/tracks/recommendations", response_model=list[Track])
+async def recommended_room_tracks(code: str, db: Session = Depends(get_db)) -> list[Track]:
+    room = _get_room(db, code)
+    rows = (
+        db.query(SongRequestORM.track_id)
+        .filter(SongRequestORM.room_id == room.id)
+        .order_by(SongRequestORM.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    seed_ids: list[str] = []
+    for (track_id,) in rows:
+        if track_id and track_id not in seed_ids and not track_id.startswith("demo-"):
+            seed_ids.append(track_id)
+        if len(seed_ids) >= 5:
+            break
+    if not seed_ids:
+        return []
+
+    try:
+        tracks = await spotify.get_recommended_tracks(seed_ids, limit=8)
+    except Exception:
+        return []
+    return [track for track in tracks if track.id not in seed_ids]
 
 
 @app.post("/api/rooms/{code}/requests", response_model=RoomSongRequest, status_code=status.HTTP_201_CREATED)

@@ -43,6 +43,8 @@ export default function App() {
   const [tracks, setTracks] = useState([]);
   const [requests, setRequests] = useState([]);
   const [sharedPlaylists, setSharedPlaylists] = useState([]);
+  const [recommendations, setRecommendations] = useState([]);
+  const [playback, setPlayback] = useState(null);
   const [expandedPlaylistId, setExpandedPlaylistId] = useState("");
   const [playlistTracks, setPlaylistTracks] = useState({});
   const [playlistTrackErrors, setPlaylistTrackErrors] = useState({});
@@ -96,6 +98,8 @@ export default function App() {
     setSharedPlaylists(nextShared);
     setStats(nextStats);
     rememberRoom(normalized);
+    loadPlayback(normalized).catch(() => {});
+    loadRecommendations(normalized).catch(() => {});
   }
 
   async function joinRoom() {
@@ -159,6 +163,22 @@ export default function App() {
       setError("방을 불러오지 못했습니다.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadPlayback(code = room?.code) {
+    if (!code) return;
+    const data = await api(`/api/rooms/${code.trim().toUpperCase()}/playback`);
+    setPlayback(data);
+  }
+
+  async function loadRecommendations(code = room?.code) {
+    if (!code) return;
+    try {
+      const data = await api(`/api/rooms/${code.trim().toUpperCase()}/tracks/recommendations`);
+      setRecommendations(data);
+    } catch (err) {
+      setRecommendations([]);
     }
   }
 
@@ -307,6 +327,8 @@ export default function App() {
     setTracks([]);
     setRequests([]);
     setSharedPlaylists([]);
+    setRecommendations([]);
+    setPlayback(null);
     setExpandedPlaylistId("");
     setPlaylistTracks({});
     setPlaylistTrackErrors({});
@@ -325,6 +347,15 @@ export default function App() {
     }
     searchRooms("").catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!room?.code) return undefined;
+    loadPlayback(room.code).catch(() => {});
+    const timer = setInterval(() => {
+      loadPlayback(room.code).catch(() => {});
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [room?.code]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -395,6 +426,7 @@ export default function App() {
                   searchTracks={searchTracks}
                   addTrack={addTrack}
                   requests={requests}
+                  recommendations={recommendations}
                   compact={isCompact}
                 />
               ) : null}
@@ -424,6 +456,8 @@ export default function App() {
                   compact={isCompact}
                 />
               ) : null}
+
+              <PlaybackBar playback={playback} compact={isCompact} />
             </View>
 
             {isWide ? (
@@ -622,6 +656,53 @@ function RoomHero({ room, stats, compact, onRefresh, onHostLogin, onOpenPlaylist
   );
 }
 
+function PlaybackBar({ playback, compact }) {
+  const track = playback?.track;
+  const hasProgress = track && playback?.progress_ms != null && playback?.duration_ms;
+  const progress = hasProgress
+    ? Math.min(100, Math.max(0, (playback.progress_ms / playback.duration_ms) * 100))
+    : 0;
+  const title = track
+    ? track.name
+    : playback?.error
+      ? "재생 정보 권한 필요"
+      : playback?.is_connected
+        ? "재생 중인 곡 없음"
+        : "방장 Spotify 연결 대기";
+  const subtitle = track
+    ? `${track.artists.join(", ")} · ${playback?.is_playing ? "재생 중" : "일시정지"}`
+    : playback?.error
+      ? "방장 Spotify를 다시 연결하면 표시됩니다."
+      : playback?.is_connected
+        ? "Spotify에서 음악을 재생하면 표시됩니다."
+        : "방장이 Spotify를 연결하면 현재 곡을 볼 수 있습니다.";
+
+  return (
+    <View style={[styles.playbackBar, compact && styles.playbackBarCompact]}>
+      {track ? (
+        <AlbumArt track={track} size={compact ? 44 : 52} />
+      ) : (
+        <AlbumFallback text="PLAY" size={compact ? 44 : 52} />
+      )}
+      <View style={styles.flex}>
+        <View style={styles.playbackLine}>
+          <Text style={styles.playbackTitle} numberOfLines={1}>{title}</Text>
+          <Text style={styles.playbackState}>{playback?.is_playing ? "LIVE" : ""}</Text>
+        </View>
+        <Text style={styles.playbackSubtitle} numberOfLines={1}>{subtitle}</Text>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${progress}%` }]} />
+        </View>
+      </View>
+      {track ? (
+        <Text style={styles.playbackTime}>
+          {formatDuration(playback?.progress_ms)} / {formatDuration(playback?.duration_ms || track.duration_ms)}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function SearchTab({
   query,
   setQuery,
@@ -633,6 +714,7 @@ function SearchTab({
   searchTracks,
   addTrack,
   requests,
+  recommendations,
   compact
 }) {
   return (
@@ -673,9 +755,16 @@ function SearchTab({
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={<TrackListHeader />}
           ListEmptyComponent={<Text style={styles.emptyText}>검색 결과가 없습니다.</Text>}
-          ListFooterComponent={requests.length ? (
-            <RecentRequests requests={requests.slice(0, 5)} />
-          ) : null}
+          ListFooterComponent={(
+            <View>
+              {requests.length ? <RecentRequests requests={requests.slice(0, 5)} /> : null}
+              <RecommendedTracks
+                tracks={recommendations}
+                busyId={busyId}
+                onAdd={addTrack}
+              />
+            </View>
+          )}
           renderItem={({ item, index }) => (
             <TrackRow
               index={index + 1}
@@ -687,6 +776,31 @@ function SearchTab({
           )}
         />
       )}
+    </View>
+  );
+}
+
+function RecommendedTracks({ tracks, busyId, onAdd }) {
+  if (!tracks.length) return null;
+
+  return (
+    <View style={styles.recommendBlock}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>추천곡</Text>
+          <Text style={styles.mutedText}>최근 추가한 곡과 어울리는 노래</Text>
+        </View>
+      </View>
+      {tracks.map((track, index) => (
+        <TrackRow
+          key={`${track.id}-${index}`}
+          index={index + 1}
+          track={track}
+          actionLabel={busyId === track.id ? "추가 중" : "추가"}
+          disabled={Boolean(busyId)}
+          onPress={() => onAdd(track)}
+        />
+      ))}
     </View>
   );
 }
@@ -705,7 +819,7 @@ function RecentRequests({ requests }) {
 function RoomTab({ room, stats, requests, onHostLogin, onHostDisconnect, onRefresh, onOpenPlaylist, compact }) {
   const qrUrl = `${API_URL}/api/rooms/${room.code}/qr`;
   return (
-    <ScrollView contentContainerStyle={[styles.tabScroll, compact && styles.tabScrollCompact]}>
+    <ScrollView style={styles.tabScroller} contentContainerStyle={[styles.tabScroll, compact && styles.tabScrollCompact]}>
       <View style={styles.roomGrid}>
         <View style={styles.infoCard}>
           <Text style={styles.cardTitle}>입장 코드</Text>
@@ -769,7 +883,7 @@ function ShareTab({
   compact
 }) {
   return (
-    <ScrollView contentContainerStyle={[styles.tabScroll, compact && styles.tabScrollCompact]}>
+    <ScrollView style={styles.tabScroller} contentContainerStyle={[styles.tabScroll, compact && styles.tabScrollCompact]}>
       <View style={styles.shareHeader}>
         <View>
           <Text style={styles.sectionTitle}>공유 플레이리스트</Text>
@@ -1000,7 +1114,7 @@ function spotifyFailureMessage(request) {
 }
 
 function formatDuration(durationMs) {
-  if (!durationMs) return "";
+  if (durationMs == null) return "";
   const totalSeconds = Math.floor(durationMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = String(totalSeconds % 60).padStart(2, "0");
@@ -1332,6 +1446,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingTop: 12
   },
+  tabScroller: {
+    flex: 1,
+    minHeight: 0
+  },
   tabScroll: {
     padding: 24,
     gap: 14
@@ -1571,6 +1689,18 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     paddingBottom: 24
   },
+  recommendBlock: {
+    borderTopWidth: 1,
+    borderTopColor: "#2A2A2A",
+    paddingTop: 18,
+    paddingBottom: 28
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8
+  },
   requestRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1591,6 +1721,61 @@ const styles = StyleSheet.create({
     color: "#FFB4A8",
     fontSize: 12,
     marginTop: 4
+  },
+  playbackBar: {
+    minHeight: 78,
+    backgroundColor: "#000000",
+    borderTopWidth: 1,
+    borderTopColor: "#242424",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 12
+  },
+  playbackBarCompact: {
+    minHeight: 66,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10
+  },
+  playbackLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8
+  },
+  playbackTitle: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900",
+    flex: 1
+  },
+  playbackSubtitle: {
+    color: "#A7A7A7",
+    fontSize: 12,
+    marginTop: 2
+  },
+  playbackState: {
+    color: "#1ED760",
+    fontSize: 10,
+    fontWeight: "900"
+  },
+  playbackTime: {
+    color: "#A7A7A7",
+    fontSize: 12,
+    minWidth: 74,
+    textAlign: "right"
+  },
+  progressTrack: {
+    height: 3,
+    backgroundColor: "#3A3A3A",
+    borderRadius: 999,
+    marginTop: 8,
+    overflow: "hidden"
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: "#1ED760"
   },
   roomGrid: {
     flexDirection: "row",

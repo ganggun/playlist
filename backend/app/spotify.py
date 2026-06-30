@@ -74,6 +74,42 @@ class SpotifyClient:
         items = response.json().get("tracks", {}).get("items", [])
         return [self._parse_track(item) for item in items]
 
+    async def get_recommended_tracks(self, seed_track_ids: list[str], limit: int = 8) -> list[Track]:
+        if not settings.spotify_client_id or not settings.spotify_client_secret:
+            return []
+
+        seeds = []
+        for track_id in seed_track_ids:
+            if track_id and not track_id.startswith("demo-") and track_id not in seeds:
+                seeds.append(track_id)
+            if len(seeds) >= 5:
+                break
+        if not seeds:
+            return []
+
+        token = await self._get_app_token()
+        if not token:
+            return []
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept-Language": SPOTIFY_LANGUAGE_HEADER,
+        }
+        params = {
+            "limit": limit,
+            "market": "KR",
+            "seed_tracks": ",".join(seeds),
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                "https://api.spotify.com/v1/recommendations",
+                headers=headers,
+                params=params,
+            )
+            response.raise_for_status()
+
+        return [self._parse_track(item) for item in response.json().get("tracks", [])]
+
     def build_authorize_url(self) -> str:
         if not settings.spotify_client_id or not settings.spotify_redirect_uri:
             raise ValueError("Spotify client id or redirect uri is empty")
@@ -148,6 +184,44 @@ class SpotifyClient:
             response = await client.get("https://api.spotify.com/v1/me", headers=headers)
             response.raise_for_status()
         return response.json()
+
+    async def get_currently_playing(self, refresh_token: str | None = None) -> dict[str, Any]:
+        user_token = await self._get_user_token(refresh_token)
+        if not user_token:
+            raise SpotifyAuthError("Spotify token is empty")
+
+        headers = {
+            "Authorization": f"Bearer {user_token}",
+            "Accept-Language": SPOTIFY_LANGUAGE_HEADER,
+        }
+        params = {"market": "KR", "additional_types": "track"}
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                "https://api.spotify.com/v1/me/player/currently-playing",
+                headers=headers,
+                params=params,
+            )
+        if response.status_code == 204:
+            return {"is_playing": False, "track": None, "progress_ms": None, "duration_ms": None}
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._api_error_message(
+                response,
+                "Spotify playback request failed",
+                forbidden_hint="현재 재생 정보를 읽으려면 user-read-currently-playing 권한이 필요합니다. 방 탭에서 방장 Spotify를 다시 연결하세요.",
+            )
+            raise SpotifyAuthError(detail, status_code=response.status_code) from exc
+
+        data = response.json()
+        item = data.get("item") or {}
+        track = self._parse_playlist_track(item)
+        return {
+            "is_playing": bool(data.get("is_playing")),
+            "track": track,
+            "progress_ms": data.get("progress_ms"),
+            "duration_ms": track.duration_ms if track else None,
+        }
 
     async def create_playlist(
         self,
