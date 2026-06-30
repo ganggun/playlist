@@ -504,6 +504,25 @@ def create_room(payload: CreateRoomRequest, db: Session = Depends(get_db)) -> Ro
     return _room_to_schema(db, room)
 
 
+@app.get("/api/rooms", response_model=list[RoomDetail])
+def list_rooms(
+    q: str = Query(default="", max_length=120),
+    limit: int = Query(default=12, ge=1, le=30),
+    db: Session = Depends(get_db),
+) -> list[RoomDetail]:
+    query = db.query(RoomORM)
+    clean = q.strip()
+    if clean:
+        like = f"%{clean.upper()}%"
+        query = query.filter(
+            (func.upper(RoomORM.code).like(like))
+            | (func.upper(RoomORM.name).like(like))
+            | (func.upper(RoomORM.host_name).like(like))
+        )
+    rows = query.order_by(RoomORM.created_at.desc()).limit(limit).all()
+    return [_room_to_schema(db, room) for room in rows]
+
+
 @app.get("/api/rooms/{code}", response_model=RoomDetail)
 def get_room(code: str, db: Session = Depends(get_db)) -> RoomDetail:
     return _room_to_schema(db, _get_room(db, code))

@@ -35,6 +35,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("search");
   const [roomCode, setRoomCode] = useState("");
   const [newRoomName, setNewRoomName] = useState("");
+  const [roomSearchQuery, setRoomSearchQuery] = useState("");
+  const [roomSearchResults, setRoomSearchResults] = useState([]);
+  const [roomSearchLoading, setRoomSearchLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [requesterName, setRequesterName] = useState("");
   const [tracks, setTracks] = useState([]);
@@ -129,6 +132,31 @@ export default function App() {
       setNotice("방이 생성되었습니다. 방장 Spotify를 연결하세요.");
     } catch (err) {
       setError("방을 만들지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function searchRooms(nextQuery = roomSearchQuery) {
+    setRoomSearchLoading(true);
+    setError("");
+    try {
+      const data = await api(`/api/rooms?q=${encodeURIComponent(nextQuery.trim())}`);
+      setRoomSearchResults(data);
+    } catch (err) {
+      setError("방 목록을 불러오지 못했습니다.");
+    } finally {
+      setRoomSearchLoading(false);
+    }
+  }
+
+  async function enterRoomFromList(code) {
+    setLoading(true);
+    setError("");
+    try {
+      await loadRoom(code);
+    } catch (err) {
+      setError("방을 불러오지 못했습니다.");
     } finally {
       setLoading(false);
     }
@@ -293,7 +321,9 @@ export default function App() {
     if (initialCode) {
       setRoomCode(initialCode);
       loadRoom(initialCode).catch(() => setError("방을 불러오지 못했습니다."));
+      return;
     }
+    searchRooms("").catch(() => {});
   }, []);
 
   return (
@@ -310,9 +340,15 @@ export default function App() {
             newRoomName={newRoomName}
             setNewRoomName={setNewRoomName}
             loading={loading}
+            roomSearchQuery={roomSearchQuery}
+            setRoomSearchQuery={setRoomSearchQuery}
+            roomSearchResults={roomSearchResults}
+            roomSearchLoading={roomSearchLoading}
             error={error}
             joinRoom={joinRoom}
             createRoom={createRoom}
+            searchRooms={searchRooms}
+            enterRoomFromList={enterRoomFromList}
           />
         ) : (
           <View style={[styles.shell, !isWide && styles.shellMobile]}>
@@ -411,9 +447,15 @@ function JoinScreen({
   newRoomName,
   setNewRoomName,
   loading,
+  roomSearchQuery,
+  setRoomSearchQuery,
+  roomSearchResults,
+  roomSearchLoading,
   error,
   joinRoom,
-  createRoom
+  createRoom,
+  searchRooms,
+  enterRoomFromList
 }) {
   return (
     <ScrollView contentContainerStyle={styles.joinWrap}>
@@ -452,6 +494,57 @@ function JoinScreen({
           <Pressable style={styles.secondaryDarkButton} onPress={createRoom} disabled={loading}>
             <Text style={styles.secondaryDarkText}>{loading ? "생성 중" : "생성"}</Text>
           </Pressable>
+        </View>
+
+        <View style={[styles.joinCard, styles.joinSearchCard]}>
+          <View style={styles.joinSearchHeader}>
+            <View style={styles.flex}>
+              <Text style={styles.cardTitle}>방 찾기</Text>
+              <Text style={styles.mutedText}>방 이름, 코드, 방장 이름으로 검색</Text>
+            </View>
+            <Pressable style={styles.roundButton} onPress={() => searchRooms("")} disabled={roomSearchLoading}>
+              <Text style={styles.roundButtonText}>최근</Text>
+            </Pressable>
+          </View>
+          <View style={styles.roomSearchControls}>
+            <TextInput
+              value={roomSearchQuery}
+              onChangeText={setRoomSearchQuery}
+              placeholder="예: 금요일, ABC123"
+              placeholderTextColor="#6F6F6F"
+              style={[styles.input, styles.roomSearchInput]}
+              onSubmitEditing={() => searchRooms(roomSearchQuery)}
+            />
+            <Pressable style={styles.greenButtonSmall} onPress={() => searchRooms(roomSearchQuery)} disabled={roomSearchLoading}>
+              <Text style={styles.greenButtonText}>{roomSearchLoading ? "검색 중" : "검색"}</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.roomResultList}>
+            {roomSearchResults.length === 0 ? (
+              <Text style={styles.emptySideText}>
+                {roomSearchLoading ? "방을 찾는 중입니다." : "표시할 방이 없습니다."}
+              </Text>
+            ) : (
+              roomSearchResults.map((item) => (
+                <Pressable
+                  key={item.id}
+                  style={styles.roomResultItem}
+                  onPress={() => enterRoomFromList(item.code)}
+                  disabled={loading}
+                >
+                  <AlbumFallback text={item.name} size={42} />
+                  <View style={styles.flex}>
+                    <Text style={styles.itemTitle} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.mutedText} numberOfLines={1}>
+                      {item.code} · {item.request_count}곡 · {item.host_spotify_display_name || item.host_name}
+                    </Text>
+                  </View>
+                  <Text style={styles.greenText}>입장</Text>
+                </Pressable>
+              ))
+            )}
+          </View>
         </View>
       </View>
 
@@ -971,6 +1064,35 @@ const styles = StyleSheet.create({
     width: 340,
     maxWidth: "100%",
     gap: 12
+  },
+  joinSearchCard: {
+    width: 560
+  },
+  joinSearchHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12
+  },
+  roomSearchControls: {
+    flexDirection: "row",
+    gap: 10,
+    flexWrap: "wrap"
+  },
+  roomSearchInput: {
+    flex: 1,
+    minWidth: 210
+  },
+  roomResultList: {
+    gap: 8
+  },
+  roomResultItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#181818",
+    borderRadius: 8,
+    padding: 10
   },
   libraryPanel: {
     width: 320,
